@@ -20,47 +20,69 @@ directories are typically:
 
 ## Build
 
-Configure and build the local tools:
+Configure the MLIR project once:
 
 ```bash
 cmake -S . -B build \
   -DMLIR_DIR=/path/to/llvm-install/lib/cmake/mlir \
   -DLLVM_DIR=/path/to/llvm-install/lib/cmake/llvm
+```
 
+Build the local translator:
+
+```bash
+make maps-translate
+```
+
+The Makefile target wraps:
+
+```bash
 cmake --build build --target maps-translate
 ```
 
+You can also build directly with CMake if preferred.
 
 ## Run The Example
 
-Generate MAPS MLIR from the bundled example JSON:
+Generate MAPS MLIR, the MAGIA header, and the MAGIA data file from the bundled
+example JSON:
 
 ```bash
-mkdir -p generated
-
-./build/tools/maps-translate/maps-translate \
-  --json-to-maps examples/magia_example.pipeline.json \
-  > generated/magia_example.pipeline.mlir
+make magia-example
 ```
 
-The generated file is regular MAPS MLIR. It may contain standard MLIR dialect
-ops such as `tensor`, `linalg`, `arith`, and `math` inside `maps.*` regions.
-For example, repeated affine map aliases such as
-`#map = affine_map<(d0, d1) -> (d0, d1)>` are normal MLIR assembly for
-`linalg.generic` indexing maps.
+By default this reads:
 
-To check that the generated MLIR parses:
+```text
+examples/magia_example.pipeline.json
+```
+
+and writes:
+
+```text
+generated/magia_example.pipeline.mlir
+generated/magia_example.h
+generated/magia_example_data.c
+```
+
+Run individual steps with:
 
 ```bash
-./build/tools/maps-opt/maps-opt generated/magia_example.pipeline.mlir \
-  > generated/magia_example.pipeline.roundtrip.mlir
+make maps-mlir
+make magia-header
+make magia-data
 ```
 
-## Repository Layout
+The generated MAGIA names and token settings can be overridden:
 
-- `include/maps/Dialect/Maps/IR`: MAPS dialect declarations
-- `lib/Dialect/Maps/IR`: MAPS dialect implementation
-- `tools/maps-translate`: JSON-to-MAPS importer
-- `tools/maps-opt`: MAPS optimizer driver
-- `test`: MLIR tests
-- `examples`: input examples
+```bash
+make magia-example HEADER_NAME=debug_magia_example NUM_TOKENS=4 NUM_TOKEN_SLOTS=2
+```
+
+Remove generated translator outputs with:
+
+```bash
+make clean-generated
+```
+
+
