@@ -1,13 +1,21 @@
 add_llvm_executable(maps-translate
   maps-translate.cpp
   JsonToMaps.cpp
+  MapsToMagiaHeader/collectors/CollectorSupport.cpp
+  MapsToMagiaHeader/Emitter.cpp
+  MapsToMagiaHeader/IRCollector.cpp
+  MapsToMagiaHeader/collectors/L2Collector.cpp
+  MapsToMagiaHeader/Model.cpp
+  MapsToMagiaHeader/collectors/OpCollector.cpp
+  MapsToMagiaHeader/collectors/SliceCollector.cpp
+  MapsToMagiaHeader/Translation.cpp
+  MapsToMagiaHeader/collectors/TransferCollector.cpp
 )
 
 llvm_update_compile_flags(maps-translate)
 
 target_link_libraries(maps-translate
   PRIVATE
-  MLIRMapsDialect
   MLIRMapsDialect
   MLIRTranslateLib
   MLIRIR

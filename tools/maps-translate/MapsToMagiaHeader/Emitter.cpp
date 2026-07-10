@@ -1,0 +1,723 @@
+#include "Emitter.h"
+
+#include "llvm/ADT/Twine.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
+
+namespace mlir::maps {
+
+static void emitGeneratedPrelude(const MagiaHeaderModel &model,
+                                 llvm::raw_ostream &os) {
+  os << "#include <stdint.h>\n\n";
+  os << "#include \"eventunit.h\"\n";
+  os << "#include \"redmule.h\"\n";
+  os << "#include \"tile.h\"\n";
+  os << "#include \"utils/maps_utils.h\"\n\n";
+  os << "#include \"add.h\"\n";
+  os << "#include \"log.h\"\n";
+  os << "#include \"redmule_kernels.h\"\n\n";
+  os << "#define MAPS_GENERATED_NUM_TOKENS "
+     << model.numTokens << "u\n";
+  os << "#define MAPS_GENERATED_NUM_TOKEN_SLOTS "
+     << model.numTokenSlots << "u\n";
+  os << "#define MAPS_GENERATED_L1_DATA_OFFSET "
+     << kGeneratedL1DataBaseOffset << "u\n";
+  os << "#define MAPS_GENERATED_READY_FLAGS_OFFSET "
+     << kGeneratedReadyFlagsOffset << "u\n";
+  os << "#define MAPS_GENERATED_READY_FLAGS_WORDS "
+     << kGeneratedReadyFlagsWords << "u\n\n";
+  os << "#ifndef MAPS_NUM_TOKENS\n";
+  os << "#define MAPS_NUM_TOKENS MAPS_GENERATED_NUM_TOKENS\n";
+  os << "#endif\n\n";
+  os << "#ifndef MAPS_NUM_TOKEN_SLOTS\n";
+  os << "#define MAPS_NUM_TOKEN_SLOTS MAPS_GENERATED_NUM_TOKEN_SLOTS\n";
+  os << "#endif\n\n";
+  os << "typedef struct {\n";
+  os << "  redmule_controller_t *redmule_ctrl;\n";
+  os << "  eu_controller_t *eu_ctrl;\n";
+  os << "} maps_generated_runtime_t;\n\n";
+}
+
+static std::string getL2GlobalSymbol(const GeneratedL2Global &global) {
+  return (Twine("maps_generated_l2_global_") + Twine(global.modelIndex)).str();
+}
+
+static uint64_t getL2GlobalAllocationBytes(const GeneratedL2Global &global) {
+  return global.tokenStrideBytes * global.numTokens;
+}
+
+static void emitL2GlobalDeclarations(const MagiaHeaderModel &model,
+                                     llvm::raw_ostream &os) {
+  for (const GeneratedL2Global &global : model.l2Globals) {
+    os << "extern uint8_t " << getL2GlobalSymbol(global) << "["
+       << getL2GlobalAllocationBytes(global) << "];\n";
+  }
+  os << "void maps_generated_init_l2_data(uint32_t seed);\n\n";
+  os << "static inline void maps_generated_init_tensors(uint32_t hartid) {\n";
+  os << "  if (hartid == 0u)\n";
+  os << "    maps_generated_init_l2_data(0x1234u);\n";
+  os << "}\n\n";
+}
+
+static StringRef getGlobalKindName(GeneratedGlobalKind kind) {
+  switch (kind) {
+  case GeneratedGlobalKind::Input:
+    return "GLOBAL_INPUT";
+  case GeneratedGlobalKind::Output:
+    return "GLOBAL_OUTPUT";
+  case GeneratedGlobalKind::Initializer:
+    return "GLOBAL_INITIALIZER";
+  case GeneratedGlobalKind::Intermediate:
+    return "GLOBAL_INTERMEDIATE";
+  }
+  llvm_unreachable("unknown global kind");
+}
+
+static StringRef getElemTypeName(Type type) {
+  if (type.isF32())
+    return "ELEM_F32";
+  if (type.isF16())
+    return "ELEM_F16";
+  if (type.isInteger(32))
+    return "ELEM_I32";
+  if (type.isInteger(8))
+    return "ELEM_U8";
+  return "ELEM_F32";
+}
+
+static StringRef getOpKindName(GeneratedOpKind kind) {
+  switch (kind) {
+  case GeneratedOpKind::Matmul:
+    return "OP_MATMUL";
+  case GeneratedOpKind::Add:
+    return "OP_ADD";
+  case GeneratedOpKind::Log:
+    return "OP_LOG";
+  case GeneratedOpKind::Exp:
+    return "OP_EXP";
+  case GeneratedOpKind::Copy:
+    return "OP_COPY";
+  }
+  llvm_unreachable("unknown op kind");
+}
+
+// MAGIA descriptors currently reserve four dimensions.  These helpers keep the
+// padding policy explicit at every array emission site.
+static void emitPaddedI64Array(ArrayRef<int64_t> values,
+                               llvm::raw_ostream &os) {
+  os << "{";
+  for (unsigned i = 0; i < 4; ++i) {
+    if (i != 0)
+      os << ", ";
+    os << (i < values.size() ? values[i] : 0);
+  }
+  os << "}";
+}
+
+static void emitPaddedU64Array(ArrayRef<uint64_t> values,
+                               llvm::raw_ostream &os) {
+  os << "{";
+  for (unsigned i = 0; i < 4; ++i) {
+    if (i != 0)
+      os << ", ";
+    os << (i < values.size() ? values[i] : 0);
+  }
+  os << "}";
+}
+
+static void emitSliceDesc(const GeneratedSlice &slice,
+                          llvm::raw_ostream &os) {
+  os << "  {\n";
+  os << "    .slice_id = " << slice.sliceId << ",\n";
+  os << "    .global_id = " << slice.globalId << ",\n";
+  os << "    .global_kind = " << getGlobalKindName(slice.globalKind) << ",\n";
+  os << "    .owner_hartid = " << slice.ownerHartid << ",\n";
+  os << "    .full_offset = ";
+  emitPaddedI64Array(slice.fullOffset, os);
+  os << ",\n";
+  os << "    .rank = " << slice.shape.size() << ",\n";
+  os << "    .shape = ";
+  emitPaddedI64Array(slice.shape, os);
+  os << ",\n";
+  os << "    .elem_type = " << getElemTypeName(slice.elementType) << ",\n";
+  os << "    .elem_bytes = " << slice.elemBytes << ",\n";
+  os << "    .l1_offset_bytes = " << slice.l1OffsetBytes << ",\n";
+  os << "    .slot_bytes = " << slice.slotBytes << ",\n";
+  os << "    .num_slots = " << slice.numSlots << ",\n";
+  os << "    .strides_bytes = ";
+  emitPaddedU64Array(slice.stridesBytes, os);
+  os << ",\n";
+  os << "  }";
+}
+
+static void emitSubsliceDesc(const MagiaHeaderModel &model,
+                             const GeneratedSubslice &subslice,
+                             llvm::raw_ostream &os) {
+  const GeneratedSlice &slice = model.slices[subslice.sliceIndex];
+
+  os << "{\n";
+  os << "      .slice_id = " << slice.sliceId << ",\n";
+  os << "      .offset = ";
+  emitPaddedI64Array(subslice.offset, os);
+  os << ",\n";
+  os << "      .rank = " << subslice.shape.size() << ",\n";
+  os << "      .shape = ";
+  emitPaddedI64Array(subslice.shape, os);
+  os << ",\n";
+  os << "      .elem_type = " << getElemTypeName(subslice.elementType) << ",\n";
+  os << "      .elem_bytes = " << subslice.elemBytes << ",\n";
+  os << "      .strides_bytes = ";
+  emitPaddedU64Array(subslice.stridesBytes, os);
+  os << ",\n";
+  os << "    }";
+}
+
+static void emitTensorSubSlice(ArrayRef<int64_t> shape,
+                               ArrayRef<uint64_t> stridesBytes,
+                               llvm::raw_ostream &os) {
+  os << "{\n";
+  os << "      .rank = " << shape.size() << "u,\n";
+  os << "      .num_elems = " << product(shape) << "u,\n";
+  os << "      .dims = {";
+  for (unsigned i = 0; i < shape.size(); ++i) {
+    if (i != 0)
+      os << ", ";
+    os << "{0u, " << shape[i] << "u, " << stridesBytes[i] << "u}";
+  }
+  os << "},\n";
+  os << "    }";
+}
+
+static void emitL2ReadDesc(const MagiaHeaderModel &model,
+                           const GeneratedL2Read &read,
+                           llvm::raw_ostream &os) {
+  const GeneratedL2Global &global = model.l2Globals[read.l2GlobalIndex];
+  const GeneratedSubslice &dst = model.subslices[read.dstSubsliceIndex];
+
+  os << "  {\n";
+  os << "    .global_id = " << global.globalId << ",\n";
+  os << "    .global_kind = " << getGlobalKindName(global.globalKind) << ",\n";
+  os << "    .src_l2_addr = (uint32_t)" << getL2GlobalSymbol(global);
+  uint64_t srcOffset = read.srcL2Address - global.l2Address;
+  if (srcOffset != 0)
+    os << " + " << srcOffset << "u";
+  os << ",\n";
+  os << "    .src_l2_token_stride_bytes = "
+     << read.srcL2TokenStrideBytes << ",\n";
+  os << "    .dst = ";
+  emitSubsliceDesc(model, dst, os);
+  os << ",\n";
+  os << "    .copy_src = ";
+  emitTensorSubSlice(dst.shape, global.stridesBytes, os);
+  os << ",\n";
+  os << "    .copy_dst = ";
+  emitTensorSubSlice(dst.shape, dst.stridesBytes, os);
+  os << ",\n";
+  os << "  }";
+}
+
+static void emitRecvDesc(const MagiaHeaderModel &model,
+                         const GeneratedRecv &recv,
+                         llvm::raw_ostream &os) {
+  const GeneratedSubslice &dst = model.subslices[recv.dstSubsliceIndex];
+
+  os << "  {\n";
+  os << "    .transition_id = " << recv.transitionId << ",\n";
+  os << "    .src_hartid = " << recv.srcHartid << ",\n";
+  os << "    .dst_hartid = " << recv.dstHartid << ",\n";
+  os << "    .dst = ";
+  emitSubsliceDesc(model, dst, os);
+  os << ",\n";
+  os << "    .ready_flag_id = " << recv.readyFlagId << ",\n";
+  os << "  }";
+}
+
+static void emitSendDesc(const MagiaHeaderModel &model,
+                         const GeneratedSend &send,
+                         llvm::raw_ostream &os) {
+  const GeneratedSubslice &src = model.subslices[send.srcSubsliceIndex];
+  const GeneratedSubslice &dst = model.subslices[send.dstSubsliceIndex];
+
+  os << "  {\n";
+  os << "    .transition_id = " << send.transitionId << ",\n";
+  os << "    .src_hartid = " << send.srcHartid << ",\n";
+  os << "    .dst_hartid = " << send.dstHartid << ",\n";
+  os << "    .src = ";
+  emitSubsliceDesc(model, src, os);
+  os << ",\n";
+  os << "    .dst = ";
+  emitSubsliceDesc(model, dst, os);
+  os << ",\n";
+  os << "    .dst_l1_data_base = " << send.dstL1DataBase << ",\n";
+  os << "    .dst_slice_l1_offset_bytes = "
+     << send.dstSliceL1OffsetBytes << ",\n";
+  os << "    .dst_slice_slot_bytes = " << send.dstSliceSlotBytes << ",\n";
+  os << "    .copy_src = ";
+  emitTensorSubSlice(src.shape, src.stridesBytes, os);
+  os << ",\n";
+  os << "    .copy_dst = ";
+  emitTensorSubSlice(dst.shape, dst.stridesBytes, os);
+  os << ",\n";
+  os << "    .ready_flag_id = " << send.readyFlagId << ",\n";
+  os << "  }";
+}
+
+static void emitSubsliceArray(const MagiaHeaderModel &model,
+                              ArrayRef<unsigned> subsliceIndices,
+                              unsigned paddedSize,
+                              llvm::raw_ostream &os) {
+  os << "{";
+  for (unsigned i = 0; i < paddedSize; ++i) {
+    if (i != 0)
+      os << ", ";
+    if (i < subsliceIndices.size())
+      emitSubsliceDesc(model, model.subslices[subsliceIndices[i]], os);
+    else
+      os << "{0}";
+  }
+  os << "}";
+}
+
+static void emitOpDesc(const MagiaHeaderModel &model,
+                       const GeneratedOp &op,
+                       llvm::raw_ostream &os) {
+  os << "  {\n";
+  os << "    .kind = " << getOpKindName(op.kind) << ",\n";
+  os << "    .num_inputs = " << op.inputSubsliceIndices.size() << "u,\n";
+  os << "    .inputs = ";
+  emitSubsliceArray(model, op.inputSubsliceIndices, 4, os);
+  os << ",\n";
+  os << "    .num_outputs = " << op.outputSubsliceIndices.size() << "u,\n";
+  os << "    .outputs = ";
+  emitSubsliceArray(model, op.outputSubsliceIndices, 2, os);
+  os << ",\n";
+  os << "    .params = {";
+  for (unsigned i = 0; i < 8; ++i) {
+    if (i != 0)
+      os << ", ";
+    os << op.params[i] << "u";
+  }
+  os << "},\n";
+  os << "  }";
+}
+
+static void emitL2WriteDesc(const MagiaHeaderModel &model,
+                            const GeneratedL2Write &write,
+                            llvm::raw_ostream &os) {
+  const GeneratedL2Global &global = model.l2Globals[write.l2GlobalIndex];
+  const GeneratedSubslice &src = model.subslices[write.srcSubsliceIndex];
+
+  os << "  {\n";
+  os << "    .global_id = " << global.globalId << ",\n";
+  os << "    .global_kind = " << getGlobalKindName(global.globalKind) << ",\n";
+  os << "    .src = ";
+  emitSubsliceDesc(model, src, os);
+  os << ",\n";
+  os << "    .dst_l2_addr = (uint32_t)" << getL2GlobalSymbol(global);
+  uint64_t dstOffset = write.dstL2Address - global.l2Address;
+  if (dstOffset != 0)
+    os << " + " << dstOffset << "u";
+  os << ",\n";
+  os << "    .dst_l2_token_stride_bytes = "
+     << write.dstL2TokenStrideBytes << ",\n";
+  os << "    .copy_src = ";
+  emitTensorSubSlice(src.shape, src.stridesBytes, os);
+  os << ",\n";
+  os << "    .copy_dst = ";
+  emitTensorSubSlice(src.shape, global.stridesBytes, os);
+  os << ",\n";
+  os << "  }";
+}
+
+static void emitTileSliceDescriptors(const MagiaHeaderModel &model,
+                                     llvm::raw_ostream &os) {
+  for (const auto &entry : model.tilePlans) {
+    const GeneratedTilePlan &plan = entry.second;
+
+    os << "static const slice_desc_t maps_generated_tile_"
+       << plan.hartid << "_slices[] = {\n";
+    for (unsigned sliceIndex : plan.sliceIndices) {
+      emitSliceDesc(model.slices[sliceIndex], os);
+      os << ",\n";
+    }
+    os << "};\n\n";
+  }
+}
+
+static void emitTileL2ReadDescriptors(const MagiaHeaderModel &model,
+                                      llvm::raw_ostream &os) {
+  for (const auto &entry : model.tilePlans) {
+    const GeneratedTilePlan &plan = entry.second;
+
+    if (!plan.initL2ReadIndices.empty()) {
+      os << "static const l2_read_desc_t maps_generated_tile_"
+         << plan.hartid << "_init_l2_reads[] = {\n";
+      for (unsigned readIndex : plan.initL2ReadIndices) {
+        emitL2ReadDesc(model, model.l2Reads[readIndex], os);
+        os << ",\n";
+      }
+      os << "};\n\n";
+    }
+
+    if (!plan.l2ReadIndices.empty()) {
+      os << "static const l2_read_desc_t maps_generated_tile_"
+         << plan.hartid << "_l2_reads[] = {\n";
+      for (unsigned readIndex : plan.l2ReadIndices) {
+        emitL2ReadDesc(model, model.l2Reads[readIndex], os);
+        os << ",\n";
+      }
+      os << "};\n\n";
+    }
+  }
+}
+
+static void emitTileRecvDescriptors(const MagiaHeaderModel &model,
+                                    llvm::raw_ostream &os) {
+  for (const auto &entry : model.tilePlans) {
+    const GeneratedTilePlan &plan = entry.second;
+    if (plan.recvIndices.empty())
+      continue;
+
+    os << "static const recv_desc_t maps_generated_tile_"
+       << plan.hartid << "_recvs[] = {\n";
+    for (unsigned recvIndex : plan.recvIndices) {
+      emitRecvDesc(model, model.recvs[recvIndex], os);
+      os << ",\n";
+    }
+    os << "};\n\n";
+  }
+}
+
+static void emitTileSendDescriptors(const MagiaHeaderModel &model,
+                                    llvm::raw_ostream &os) {
+  for (const auto &entry : model.tilePlans) {
+    const GeneratedTilePlan &plan = entry.second;
+    if (plan.sendIndices.empty())
+      continue;
+
+    os << "static const send_desc_t maps_generated_tile_"
+       << plan.hartid << "_sends[] = {\n";
+    for (unsigned sendIndex : plan.sendIndices) {
+      emitSendDesc(model, model.sends[sendIndex], os);
+      os << ",\n";
+    }
+    os << "};\n\n";
+  }
+}
+
+static void emitTileOpDescriptors(const MagiaHeaderModel &model,
+                                  llvm::raw_ostream &os) {
+  for (const auto &entry : model.tilePlans) {
+    const GeneratedTilePlan &plan = entry.second;
+    if (plan.opIndices.empty())
+      continue;
+
+    os << "static const op_desc_t maps_generated_tile_"
+       << plan.hartid << "_ops[] = {\n";
+    for (unsigned opIndex : plan.opIndices) {
+      emitOpDesc(model, model.ops[opIndex], os);
+      os << ",\n";
+    }
+    os << "};\n\n";
+  }
+}
+
+static void emitTileL2WriteDescriptors(const MagiaHeaderModel &model,
+                                       llvm::raw_ostream &os) {
+  for (const auto &entry : model.tilePlans) {
+    const GeneratedTilePlan &plan = entry.second;
+    if (plan.l2WriteIndices.empty())
+      continue;
+
+    os << "static const l2_write_desc_t maps_generated_tile_"
+       << plan.hartid << "_l2_writes[] = {\n";
+    for (unsigned writeIndex : plan.l2WriteIndices) {
+      emitL2WriteDesc(model, model.l2Writes[writeIndex], os);
+      os << ",\n";
+    }
+    os << "};\n\n";
+  }
+}
+
+static void emitClearMailbox(llvm::raw_ostream &os) {
+  os << "static inline void maps_generated_clear_mailbox(uint32_t hartid) {\n";
+  os << "  volatile uint32_t *flags = "
+        "(volatile uint32_t *)(get_l1_base(hartid) + "
+        "MAPS_GENERATED_READY_FLAGS_OFFSET);\n\n";
+  os << "  for (uint32_t i = 0; i < MAPS_GENERATED_READY_FLAGS_WORDS; ++i)\n";
+  os << "    flags[i] = 0u;\n";
+  os << "}\n\n";
+}
+
+static void emitPlanArrayAssignment(StringRef fieldName, StringRef arraySuffix,
+                                    unsigned count, int64_t hartid,
+                                    llvm::raw_ostream &os) {
+  if (count == 0)
+    return;
+
+  os << "    plan->num_" << fieldName << " = " << count << "u;\n";
+  os << "    plan->" << fieldName << " = maps_generated_tile_"
+     << hartid << "_" << arraySuffix << ";\n";
+}
+
+static void emitExecuteOp(llvm::raw_ostream &os) {
+  os << "static inline void maps_generated_zero_l1_bytes(\n";
+  os << "    uint32_t addr, uint32_t bytes) {\n";
+  os << "  volatile uint32_t *words = (volatile uint32_t *)addr;\n";
+  os << "  uint32_t num_words = bytes / sizeof(uint32_t);\n\n";
+  os << "  for (uint32_t i = 0u; i < num_words; ++i)\n";
+  os << "    words[i] = 0u;\n";
+  os << "  if ((bytes & 2u) != 0u)\n";
+  os << "    *(volatile uint16_t *)(addr + num_words * sizeof(uint32_t)) = 0u;\n";
+  os << "}\n\n";
+
+  os << "static inline int maps_generated_execute_op(\n";
+  os << "    const tile_plan_t *plan, const op_desc_t *op,\n";
+  os << "    uint32_t slot, void *user) {\n";
+  os << "  maps_generated_runtime_t *runtime = "
+        "(maps_generated_runtime_t *)user;\n\n";
+  os << "  if (op->kind == OP_MATMUL) {\n";
+  os << "    uint32_t lhs = local_subslice_addr(plan, &op->inputs[0], slot);\n";
+  os << "    uint32_t rhs = local_subslice_addr(plan, &op->inputs[1], slot);\n";
+  os << "    uint32_t out = local_subslice_addr(plan, &op->outputs[0], slot);\n\n";
+  os << "    maps_generated_zero_l1_bytes(\n";
+  os << "        out, op->params[0] * op->params[2] * sizeof(float16));\n";
+  os << "    maps_matmul_redmule(runtime->redmule_ctrl, runtime->eu_ctrl,\n";
+  os << "                        lhs, rhs, out,\n";
+  os << "                        (uint16_t)op->params[0],\n";
+  os << "                        (uint16_t)op->params[1],\n";
+  os << "                        (uint16_t)op->params[2],\n";
+  os << "                        MAPS_WAIT_MODE);\n";
+  os << "    return 0;\n";
+  os << "  }\n\n";
+  os << "  if (op->kind == OP_LOG) {\n";
+  os << "    uint32_t in = local_subslice_addr(plan, &op->inputs[0], slot);\n";
+  os << "    uint32_t out = local_subslice_addr(plan, &op->outputs[0], slot);\n\n";
+  os << "    maps_log_f16((float16 *)out, (const float16 *)in,\n";
+  os << "                 (int32_t)op->params[2]);\n";
+  os << "    return 0;\n";
+  os << "  }\n\n";
+  os << "  if (op->kind == OP_ADD) {\n";
+  os << "    uint32_t lhs = local_subslice_addr(plan, &op->inputs[0], slot);\n";
+  os << "    uint32_t rhs = local_subslice_addr(plan, &op->inputs[1], slot);\n";
+  os << "    uint32_t out = local_subslice_addr(plan, &op->outputs[0], slot);\n\n";
+  os << "    maps_add_f16((float16 *)out, (const float16 *)lhs,\n";
+  os << "                 (const float16 *)rhs, (int32_t)op->params[2]);\n";
+  os << "    return 0;\n";
+  os << "  }\n\n";
+  os << "  return maps_execute_builtin_op(plan, op, slot);\n";
+  os << "}\n\n";
+}
+
+static void emitFillPlan(const MagiaHeaderModel &model,
+                         llvm::raw_ostream &os) {
+  os << "static inline uint32_t maps_generated_fill_plan(\n";
+  os << "    tile_plan_t *plan, uint32_t hartid,\n";
+  os << "    maps_generated_runtime_t *runtime) {\n";
+  os << "  *plan = (tile_plan_t){\n";
+  os << "    .hartid = hartid,\n";
+  os << "    .l1_data_base = get_l1_base(hartid) + "
+        "MAPS_GENERATED_L1_DATA_OFFSET,\n";
+  os << "    .ready_flags_base = MAPS_GENERATED_READY_FLAGS_OFFSET,\n";
+  os << "    .ready_flags_count = MAPS_GENERATED_READY_FLAGS_WORDS,\n";
+  os << "    .num_token_slots = MAPS_NUM_TOKEN_SLOTS,\n";
+  os << "    .execute_op = maps_generated_execute_op,\n";
+  os << "    .execute_op_user = runtime,\n";
+  os << "  };\n\n";
+  os << "  switch (hartid) {\n";
+
+  for (const auto &entry : model.tilePlans) {
+    const GeneratedTilePlan &plan = entry.second;
+    os << "  case " << plan.hartid << "u:\n";
+    emitPlanArrayAssignment("slices", "slices", plan.sliceIndices.size(),
+                            plan.hartid, os);
+    emitPlanArrayAssignment("init_l2_reads", "init_l2_reads",
+                            plan.initL2ReadIndices.size(), plan.hartid, os);
+    emitPlanArrayAssignment("l2_reads", "l2_reads",
+                            plan.l2ReadIndices.size(), plan.hartid, os);
+    emitPlanArrayAssignment("recvs", "recvs", plan.recvIndices.size(),
+                            plan.hartid, os);
+    emitPlanArrayAssignment("ops", "ops", plan.opIndices.size(),
+                            plan.hartid, os);
+    emitPlanArrayAssignment("sends", "sends", plan.sendIndices.size(),
+                            plan.hartid, os);
+    emitPlanArrayAssignment("l2_writes", "l2_writes",
+                            plan.l2WriteIndices.size(), plan.hartid, os);
+    os << "    return 1u;\n";
+  }
+
+  os << "  default:\n";
+  os << "    return 0u;\n";
+  os << "  }\n";
+  os << "}\n\n";
+}
+
+static void emitFirstOutputChecker(const MagiaHeaderModel &model,
+                                   llvm::raw_ostream &os) {
+  const GeneratedL2Global *firstOutput = nullptr;
+  for (const GeneratedL2Global &global : model.l2Globals) {
+    if (global.globalKind == GeneratedGlobalKind::Output) {
+      firstOutput = &global;
+      break;
+    }
+  }
+
+  if (!firstOutput) {
+    os << "static inline uint32_t maps_generated_check_output(void) {\n";
+    os << "  return 0u;\n";
+    os << "}\n\n";
+    return;
+  }
+
+  std::string symbol = getL2GlobalSymbol(*firstOutput);
+  os << "#define MAPS_GENERATED_FIRST_OUTPUT_TOKEN_BYTES "
+     << firstOutput->tensorBytes << "u\n";
+  os << "#define MAPS_GENERATED_FIRST_OUTPUT_TOKEN_STRIDE_BYTES "
+     << firstOutput->tokenStrideBytes << "u\n";
+  os << "#ifndef MAPS_GENERATED_FIRST_OUTPUT_TOKEN0_CHECKSUM\n";
+  os << "#define MAPS_GENERATED_FIRST_OUTPUT_TOKEN0_CHECKSUM 0u\n";
+  os << "#endif\n\n";
+
+  os << "static inline uint32_t "
+        "maps_generated_first_output_token0_checksum(void) {\n";
+  os << "  uint32_t checksum = 2166136261u;\n";
+  os << "  volatile const uint8_t *out = "
+     << "(volatile const uint8_t *)" << symbol << ";\n\n";
+  os << "  for (uint32_t i = 0u; "
+        "i < MAPS_GENERATED_FIRST_OUTPUT_TOKEN_BYTES; ++i) {\n";
+  os << "    checksum ^= out[i];\n";
+  os << "    checksum *= 16777619u;\n";
+  os << "  }\n";
+  os << "  return checksum;\n";
+  os << "}\n\n";
+
+  os << "static inline uint32_t maps_generated_check_output(void) {\n";
+  os << "#if MAPS_GENERATED_FIRST_OUTPUT_TOKEN0_CHECKSUM != 0u\n";
+  os << "  return maps_generated_first_output_token0_checksum() !=\n";
+  os << "         MAPS_GENERATED_FIRST_OUTPUT_TOKEN0_CHECKSUM;\n";
+  os << "#else\n";
+  os << "  uint32_t seenNonzero = 0u;\n";
+  os << "  volatile const uint8_t *out = "
+     << "(volatile const uint8_t *)" << symbol << ";\n\n";
+  os << "  for (uint32_t i = 0u; "
+        "i < MAPS_GENERATED_FIRST_OUTPUT_TOKEN_BYTES; ++i)\n";
+  os << "    seenNonzero |= out[i];\n";
+  os << "  if (seenNonzero == 0u)\n";
+  os << "    return 1u;\n\n";
+  os << "  return 0u;\n";
+  os << "#endif\n";
+  os << "}\n\n";
+}
+
+[[maybe_unused]] static void emitTileSliceDebug(const MagiaHeaderModel &model,
+                                                llvm::raw_ostream &os) {
+
+  os << "/* Debug MAPS -> Magia header model */\n";
+  os << "/* tiles: " << model.tilePlans.size() << " */\n";
+  os << "/* l2 globals: " << model.l2Globals.size()
+     << ", l2 bytes used: " << (model.nextL2Address - kMagiaL2Base)
+     << " */\n";
+  for (const auto &entry : model.tilePlans) {
+    const GeneratedTilePlan &plan = entry.second;
+    os << "/* tile " << plan.hartid << ": " << plan.sliceIndices.size()
+       << " slices, " << plan.initL2ReadIndices.size()
+       << " init_l2_reads, " << plan.l2ReadIndices.size()
+       << " l2_reads, " << plan.recvIndices.size()
+       << " recvs, " << plan.opIndices.size()
+       << " ops, " << plan.sendIndices.size()
+       << " sends, " << plan.l2WriteIndices.size()
+       << " l2_writes, l1_data_bytes = " << plan.l1DataBytes << " */\n";
+
+    for (unsigned sliceIndex : plan.sliceIndices) {
+      const GeneratedSlice &slice = model.slices[sliceIndex];
+      os << "/*   slice model_index = " << slice.modelIndex
+         << ", slice_id = " << slice.sliceId
+         << ", global_id = " << slice.globalId
+         << ", kind = " << getGlobalKindName(slice.globalKind)
+         << ", l1_offset_bytes = " << slice.l1OffsetBytes << " */\n";
+    }
+  }
+}
+
+void emitDebugHeader(const MagiaHeaderModel &model, llvm::raw_ostream &os) {
+  os << "#ifndef MAPS_GENERATED_TEST_H\n";
+  os << "#define MAPS_GENERATED_TEST_H\n\n";
+
+  emitGeneratedPrelude(model, os);
+  emitL2GlobalDeclarations(model, os);
+  emitTileSliceDescriptors(model, os);
+  emitTileL2ReadDescriptors(model, os);
+  emitTileRecvDescriptors(model, os);
+  emitTileOpDescriptors(model, os);
+  emitTileSendDescriptors(model, os);
+  emitTileL2WriteDescriptors(model, os);
+  emitClearMailbox(os);
+  emitExecuteOp(os);
+  emitFillPlan(model, os);
+  emitFirstOutputChecker(model, os);
+
+  //emitTileSliceDebug(model, os);
+
+  os << "\n#endif /* MAPS_GENERATED_TEST_H */\n";
+}
+
+void emitDataFile(const MagiaHeaderModel &model, llvm::raw_ostream &os) {
+  os << "#include <stdint.h>\n";
+  os << "#include <stddef.h>\n\n";
+
+  for (const GeneratedL2Global &global : model.l2Globals) {
+    os << "uint8_t " << getL2GlobalSymbol(global) << "["
+       << getL2GlobalAllocationBytes(global)
+       << "] __attribute__((aligned(16)));\n";
+  }
+
+  os << "\nstatic uint32_t maps_generated_lcg(uint32_t *state) {\n";
+  os << "  *state = *state * 1664525u + 1013904223u;\n";
+  os << "  return *state;\n";
+  os << "}\n\n";
+
+  os << "static void maps_generated_zero_bytes(uint8_t *dst, size_t bytes) {\n";
+  os << "  for (size_t i = 0; i < bytes; ++i)\n";
+  os << "    dst[i] = 0u;\n";
+  os << "}\n\n";
+
+  os << "static void maps_generated_fill_f16(uint8_t *dst, size_t bytes,\n";
+  os << "                                    uint32_t *state) {\n";
+  os << "  static const uint16_t values[] = {\n";
+  os << "      0x3c00u, 0x4000u, 0x4200u, 0x4400u,\n";
+  os << "      0x4500u, 0x4600u, 0x4700u, 0x4800u,\n";
+  os << "  };\n";
+  os << "  uint16_t *half = (uint16_t *)dst;\n";
+  os << "  size_t elems = bytes / sizeof(uint16_t);\n";
+  os << "  for (size_t i = 0; i < elems; ++i)\n";
+  os << "    half[i] = values[(maps_generated_lcg(state) >> 24) & 7u];\n";
+  os << "}\n\n";
+
+  os << "static void maps_generated_fill_bytes(uint8_t *dst, size_t bytes,\n";
+  os << "                                      uint32_t *state) {\n";
+  os << "  for (size_t i = 0; i < bytes; ++i)\n";
+  os << "    dst[i] = (uint8_t)(maps_generated_lcg(state) >> 24);\n";
+  os << "}\n\n";
+
+  os << "void maps_generated_init_l2_data(uint32_t seed) {\n";
+  os << "  uint32_t state = seed;\n";
+  for (const GeneratedL2Global &global : model.l2Globals) {
+    os << "\n";
+    if (global.globalKind == GeneratedGlobalKind::Input ||
+        global.globalKind == GeneratedGlobalKind::Initializer) {
+      if (global.elemBytes == 2) {
+        os << "  maps_generated_fill_f16(" << getL2GlobalSymbol(global)
+           << ", sizeof(" << getL2GlobalSymbol(global) << "), &state);\n";
+      } else {
+        os << "  maps_generated_fill_bytes(" << getL2GlobalSymbol(global)
+           << ", sizeof(" << getL2GlobalSymbol(global) << "), &state);\n";
+      }
+    } else {
+      os << "  maps_generated_zero_bytes(" << getL2GlobalSymbol(global)
+         << ", sizeof(" << getL2GlobalSymbol(global) << "));\n";
+    }
+  }
+  os << "}\n";
+}
+
+} // namespace mlir::maps

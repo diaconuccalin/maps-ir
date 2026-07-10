@@ -2,9 +2,12 @@
 
 namespace mlir::maps {
 void registerJsonToMapsTranslation();
+void registerMapsToMagiaHeaderTranslation();
 }
 
 int main(int argc, char **argv) {
   mlir::maps::registerJsonToMapsTranslation();
+  mlir::maps::registerMapsToMagiaHeaderTranslation();
+  
   return failed(mlir::mlirTranslateMain(argc, argv, "MAPS translation-driver"));
 }

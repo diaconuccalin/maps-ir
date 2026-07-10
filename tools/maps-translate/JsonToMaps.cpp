@@ -90,9 +90,17 @@ static Type parseElementType(const llvm::json::Object &tensor,
                              OpBuilder &builder) {
     std::optional<StringRef> dtype = tensor.getString("dtype");
     
-    // fallback to f32 if dtype is not specified, TODO: need to add it in the maps tool
-    if (!dtype)
+    if (!dtype) {
+        if (std::optional<int64_t> elemBytes = tensor.getInteger("elem_bytes")) {
+            if (*elemBytes == 2)
+                return builder.getF16Type();
+            if (*elemBytes == 4)
+                return builder.getF32Type();
+            if (*elemBytes == 8)
+                return builder.getF64Type();
+        }
         return builder.getF32Type();
+    }
 
     if (*dtype == "f32" || *dtype == "float32" || *dtype == "fp32")
         return builder.getF32Type();

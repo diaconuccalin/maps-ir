@@ -1,0 +1,205 @@
+#ifndef MAPS_TOOLS_MAPS_TRANSLATE_MAPSTOMAGIAHEADER_MODEL_H
+#define MAPS_TOOLS_MAPS_TRANSLATE_MAPSTOMAGIAHEADER_MODEL_H
+
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Support/LLVM.h"
+#include "mlir/Support/LogicalResult.h"
+
+#include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/StringMap.h"
+
+#include <cstdint>
+#include <string>
+
+namespace mlir::maps {
+
+// MAGIA memory layout constants used by the generated test header.  The model
+// builder keeps these values in one place so collection and emission agree on
+// allocation size, alignment, and token buffering.
+static constexpr uint64_t kMagiaL1UsableBytes = 896ull * 1024ull;
+static constexpr uint64_t kGeneratedL1DataBaseOffset = 0ull;
+static constexpr uint64_t kGeneratedL1AlignmentBytes = 16ull;
+static constexpr uint64_t kGeneratedReadyFlagsOffset = 0xD0000ull;
+static constexpr unsigned kGeneratedReadyFlagsWords = 4096;
+static constexpr uint64_t kMagiaL2Base = 0xCC000000ull;
+static constexpr uint64_t kMagiaL2End = 0xCCFF0000ull;
+static constexpr uint64_t kGeneratedL2AlignmentBytes = 16ull;
+static constexpr unsigned kDefaultNumTokenSlots = 2;
+static constexpr unsigned kDefaultNumTokens = 1;
+
+enum class GeneratedGlobalKind {
+  Input,
+  Output,
+  Initializer,
+  Intermediate,
+};
+
+enum class GeneratedOpKind {
+  Matmul,
+  Add,
+  Log,
+  Exp,
+  Copy,
+};
+
+// A slice is the L1 allocation owned by a tile.  It points back to the logical
+// global tensor and records the offset of this tile-local view.
+struct GeneratedSlice {
+  unsigned modelIndex = 0;
+  unsigned sliceId = 0;
+  unsigned globalId = 0;
+  std::string globalName;
+  GeneratedGlobalKind globalKind = GeneratedGlobalKind::Initializer;
+  int64_t ownerHartid = -1;
+  SmallVector<int64_t> fullOffset;
+  SmallVector<int64_t> shape;
+  Type elementType;
+  unsigned elemBytes = 0;
+  uint64_t l1OffsetBytes = 0;
+  uint64_t slotBytes = 0;
+  unsigned numSlots = 1;
+  SmallVector<uint64_t> stridesBytes;
+};
+
+// Sub-slices describe copy endpoints inside an already allocated GeneratedSlice.
+struct GeneratedSubslice {
+  unsigned modelIndex = 0;
+  unsigned sliceIndex = 0;
+  SmallVector<int64_t> offset;
+  SmallVector<int64_t> shape;
+  Type elementType;
+  unsigned elemBytes = 0;
+  SmallVector<uint64_t> stridesBytes;
+};
+
+// Host-visible tensors are allocated once in the generated L2 region.  Multiple
+// tile reads can reference the same GeneratedL2Global by global name and kind.
+struct GeneratedL2Global {
+  unsigned modelIndex = 0;
+  unsigned globalId = 0;
+  std::string globalName;
+  GeneratedGlobalKind globalKind = GeneratedGlobalKind::Input;
+  SmallVector<int64_t> shape;
+  Type elementType;
+  unsigned elemBytes = 0;
+  uint64_t tensorBytes = 0;
+  uint64_t l2Address = 0;
+  uint64_t tokenStrideBytes = 0;
+  unsigned numTokens = 1;
+  SmallVector<uint64_t> stridesBytes;
+};
+
+struct GeneratedL2Read {
+  unsigned modelIndex = 0;
+  unsigned l2GlobalIndex = 0;
+  unsigned dstSubsliceIndex = 0;
+  uint64_t srcL2Address = 0;
+  uint64_t srcL2TokenStrideBytes = 0;
+};
+
+struct GeneratedRecv {
+  unsigned modelIndex = 0;
+  unsigned transitionId = 0;
+  int64_t srcHartid = -1;
+  int64_t dstHartid = -1;
+  unsigned dstSubsliceIndex = 0;
+  unsigned readyFlagId = 0;
+};
+
+struct GeneratedSend {
+  unsigned modelIndex = 0;
+  unsigned transitionId = 0;
+  int64_t srcHartid = -1;
+  int64_t dstHartid = -1;
+  unsigned srcSubsliceIndex = 0;
+  unsigned dstSubsliceIndex = 0;
+  uint64_t dstL1DataBase = kGeneratedL1DataBaseOffset;
+  uint64_t dstSliceL1OffsetBytes = 0;
+  uint64_t dstSliceSlotBytes = 0;
+  unsigned readyFlagId = 0;
+};
+
+struct GeneratedOp {
+  unsigned modelIndex = 0;
+  GeneratedOpKind kind = GeneratedOpKind::Copy;
+  SmallVector<unsigned> inputSubsliceIndices;
+  SmallVector<unsigned> outputSubsliceIndices;
+  uint32_t params[8] = {};
+};
+
+struct GeneratedL2Write {
+  unsigned modelIndex = 0;
+  unsigned l2GlobalIndex = 0;
+  unsigned srcSubsliceIndex = 0;
+  uint64_t dstL2Address = 0;
+  uint64_t dstL2TokenStrideBytes = 0;
+};
+
+struct GeneratedTilePlan {
+  int64_t hartid = -1;
+  uint64_t l1DataBaseOffset = kGeneratedL1DataBaseOffset;
+  uint64_t nextL1OffsetBytes = 0;
+  uint64_t l1DataBytes = 0;
+  SmallVector<unsigned> sliceIndices;
+  SmallVector<unsigned> initL2ReadIndices;
+  SmallVector<unsigned> l2ReadIndices;
+  SmallVector<unsigned> recvIndices;
+  SmallVector<unsigned> sendIndices;
+  SmallVector<unsigned> opIndices;
+  SmallVector<unsigned> l2WriteIndices;
+};
+
+struct MagiaHeaderModel {
+  unsigned numTokens = kDefaultNumTokens;
+  unsigned numTokenSlots = kDefaultNumTokenSlots;
+  unsigned nextGlobalId = 0;
+  unsigned nextTransitionId = 0;
+  llvm::StringMap<unsigned> globalIds;
+  llvm::DenseMap<int64_t, unsigned> nextSliceIdByHart;
+  llvm::StringMap<unsigned> l2GlobalIndices;
+  llvm::StringMap<unsigned> transitionIds;
+  llvm::StringMap<unsigned> initializerSliceIndices;
+  SmallVector<GeneratedSlice, 0> slices;
+  SmallVector<GeneratedSubslice, 0> subslices;
+  SmallVector<GeneratedL2Global, 0> l2Globals;
+  SmallVector<GeneratedL2Read, 0> l2Reads;
+  SmallVector<GeneratedRecv, 0> recvs;
+  SmallVector<GeneratedSend, 0> sends;
+  SmallVector<GeneratedOp, 0> ops;
+  SmallVector<GeneratedL2Write, 0> l2Writes;
+  llvm::MapVector<int64_t, GeneratedTilePlan> tilePlans;
+  uint64_t nextL2Address = kMagiaL2Base;
+};
+
+unsigned addGeneratedSlice(MagiaHeaderModel &model, GeneratedSlice slice);
+unsigned addGeneratedSubslice(MagiaHeaderModel &model,
+                              GeneratedSubslice subslice);
+GeneratedSubslice makeWholeSubslice(const GeneratedSlice &slice);
+uint64_t computeOffsetBytes(ArrayRef<int64_t> offsets,
+                            ArrayRef<uint64_t> stridesBytes);
+unsigned addGeneratedL2Read(MagiaHeaderModel &model, GeneratedL2Read read);
+unsigned getOrCreateTransitionId(MagiaHeaderModel &model, StringRef channel);
+unsigned addGeneratedRecv(MagiaHeaderModel &model, GeneratedRecv recv);
+unsigned addGeneratedSend(MagiaHeaderModel &model, GeneratedSend send);
+unsigned addGeneratedOp(MagiaHeaderModel &model, GeneratedOp op);
+unsigned addGeneratedL2Write(MagiaHeaderModel &model, GeneratedL2Write write);
+void noteTile(MagiaHeaderModel &model, int64_t hartid);
+uint64_t alignTo(uint64_t value, uint64_t alignment);
+uint64_t product(ArrayRef<int64_t> values);
+uint64_t computeSlotBytes(const GeneratedSlice &slice);
+unsigned getElementByteWidth(Type type);
+SmallVector<uint64_t> computeContiguousStridesBytes(ArrayRef<int64_t> shape,
+                                                    unsigned elemBytes);
+LogicalResult getOrCreateL2Global(MagiaHeaderModel &model,
+                                  StringRef globalName,
+                                  GeneratedGlobalKind globalKind,
+                                  RankedTensorType tensorType,
+                                  unsigned numTokens,
+                                  unsigned &l2GlobalIndex);
+LogicalResult allocateSliceInTileL1(MagiaHeaderModel &model,
+                                    unsigned sliceIndex);
+
+} // namespace mlir::maps
+
+#endif
