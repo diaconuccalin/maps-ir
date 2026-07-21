@@ -104,7 +104,8 @@ struct GeneratedRecv {
   int64_t srcHartid = -1;
   int64_t dstHartid = -1;
   unsigned dstSubsliceIndex = 0;
-  unsigned readyFlagId = 0;
+  // Index of this producer's destination-local FIFO sub-ring.
+  unsigned producerIdx = 0;
 };
 
 struct GeneratedSend {
@@ -117,7 +118,8 @@ struct GeneratedSend {
   uint64_t dstL1DataBase = kGeneratedL1DataBaseOffset;
   uint64_t dstSliceL1OffsetBytes = 0;
   uint64_t dstSliceSlotBytes = 0;
-  unsigned readyFlagId = 0;
+  // Must match the destination recv's FIFO sub-ring index.
+  unsigned producerIdx = 0;
 };
 
 struct GeneratedOp {

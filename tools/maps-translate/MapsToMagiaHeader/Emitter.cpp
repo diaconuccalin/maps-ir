@@ -4,6 +4,8 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
+
 namespace mlir::maps {
 
 static void emitGeneratedPrelude(const MagiaHeaderModel &model,
@@ -12,7 +14,7 @@ static void emitGeneratedPrelude(const MagiaHeaderModel &model,
   os << "#include \"eventunit.h\"\n";
   os << "#include \"redmule.h\"\n";
   os << "#include \"tile.h\"\n";
-  os << "#include \"utils/maps_utils.h\"\n\n";
+  os << "#include \"utils/maps_utils_v2.h\"\n\n";
   os << "#include \"add.h\"\n";
   os << "#include \"log.h\"\n";
   os << "#include \"redmule_kernels.h\"\n\n";
@@ -228,7 +230,7 @@ static void emitRecvDesc(const MagiaHeaderModel &model,
   os << "    .dst = ";
   emitSubsliceDesc(model, dst, os);
   os << ",\n";
-  os << "    .ready_flag_id = " << recv.readyFlagId << ",\n";
+  os << "    .producer_idx = " << recv.producerIdx << ",\n";
   os << "  }";
 }
 
@@ -258,7 +260,7 @@ static void emitSendDesc(const MagiaHeaderModel &model,
   os << "    .copy_dst = ";
   emitTensorSubSlice(dst.shape, dst.stridesBytes, os);
   os << ",\n";
-  os << "    .ready_flag_id = " << send.readyFlagId << ",\n";
+  os << "    .producer_idx = " << send.producerIdx << ",\n";
   os << "  }";
 }
 
@@ -378,7 +380,7 @@ static void emitTileRecvDescriptors(const MagiaHeaderModel &model,
     if (plan.recvIndices.empty())
       continue;
 
-    os << "static const recv_desc_t maps_generated_tile_"
+    os << "static const fifo_recv_desc_t maps_generated_tile_"
        << plan.hartid << "_recvs[] = {\n";
     for (unsigned recvIndex : plan.recvIndices) {
       emitRecvDesc(model, model.recvs[recvIndex], os);
@@ -395,7 +397,7 @@ static void emitTileSendDescriptors(const MagiaHeaderModel &model,
     if (plan.sendIndices.empty())
       continue;
 
-    os << "static const send_desc_t maps_generated_tile_"
+    os << "static const fifo_send_desc_t maps_generated_tile_"
        << plan.hartid << "_sends[] = {\n";
     for (unsigned sendIndex : plan.sendIndices) {
       emitSendDesc(model, model.sends[sendIndex], os);
@@ -439,13 +441,25 @@ static void emitTileL2WriteDescriptors(const MagiaHeaderModel &model,
   }
 }
 
-static void emitClearMailbox(llvm::raw_ostream &os) {
-  os << "static inline void maps_generated_clear_mailbox(uint32_t hartid) {\n";
-  os << "  volatile uint32_t *flags = "
-        "(volatile uint32_t *)(get_l1_base(hartid) + "
-        "MAPS_GENERATED_READY_FLAGS_OFFSET);\n\n";
-  os << "  for (uint32_t i = 0; i < MAPS_GENERATED_READY_FLAGS_WORDS; ++i)\n";
-  os << "    flags[i] = 0u;\n";
+static uint64_t getFifoSlotDataSize(const MagiaHeaderModel &model,
+                                    const GeneratedTilePlan &plan) {
+  uint64_t maxBytes = 0;
+  for (unsigned recvIndex : plan.recvIndices) {
+    const GeneratedRecv &recv = model.recvs[recvIndex];
+    const GeneratedSubslice &dst = model.subslices[recv.dstSubsliceIndex];
+    maxBytes = std::max(maxBytes, product(dst.shape) * dst.elemBytes);
+  }
+  return maxBytes;
+}
+
+static void emitFifoStorageHelper(llvm::raw_ostream &os) {
+  os << "static inline uint32_t maps_generated_fifo_bytes(\n";
+  os << "    uint32_t num_producers, uint32_t num_slots,\n";
+  os << "    uint32_t slot_data_size) {\n";
+  os << "  uint32_t slot_stride = FIFO_SLOT_META_SIZE + "
+        "((slot_data_size + 3u) & ~3u);\n";
+  os << "  return FIFO_HEADER_SIZE + num_producers * FIFO_RING_STATE_SIZE +\n";
+  os << "         num_producers * num_slots * slot_stride;\n";
   os << "}\n\n";
 }
 
@@ -512,12 +526,11 @@ static void emitExecuteOp(llvm::raw_ostream &os) {
 static void emitFillPlan(const MagiaHeaderModel &model,
                          llvm::raw_ostream &os) {
   os << "static inline uint32_t maps_generated_fill_plan(\n";
-  os << "    tile_plan_t *plan, uint32_t hartid,\n";
+  os << "    fifo_tile_plan_t *plan, uint32_t hartid,\n";
   os << "    maps_generated_runtime_t *runtime) {\n";
-  os << "  *plan = (tile_plan_t){\n";
+  os << "  *plan = (fifo_tile_plan_t){\n";
   os << "    .hartid = hartid,\n";
-  os << "    .l1_data_base = get_l1_base(hartid) + "
-        "MAPS_GENERATED_L1_DATA_OFFSET,\n";
+  os << "    .l1_data_base = get_l1_base(hartid),\n";
   os << "    .ready_flags_base = MAPS_GENERATED_READY_FLAGS_OFFSET,\n";
   os << "    .ready_flags_count = MAPS_GENERATED_READY_FLAGS_WORDS,\n";
   os << "    .num_token_slots = MAPS_NUM_TOKEN_SLOTS,\n";
@@ -528,7 +541,17 @@ static void emitFillPlan(const MagiaHeaderModel &model,
 
   for (const auto &entry : model.tilePlans) {
     const GeneratedTilePlan &plan = entry.second;
+    uint64_t fifoSlotDataSize = getFifoSlotDataSize(model, plan);
     os << "  case " << plan.hartid << "u:\n";
+    os << "    plan->fifo = (fifo_desc_t){\n";
+    os << "      .l1_offset_bytes = 0u,\n";
+    os << "      .num_producers = " << plan.recvIndices.size() << "u,\n";
+    os << "      .num_slots = MAPS_NUM_TOKEN_SLOTS,\n";
+    os << "      .slot_data_size = " << fifoSlotDataSize << "u,\n";
+    os << "    };\n";
+    os << "    plan->l1_data_base += maps_generated_fifo_bytes(\n";
+    os << "        plan->fifo.num_producers, plan->fifo.num_slots,\n";
+    os << "        plan->fifo.slot_data_size);\n";
     emitPlanArrayAssignment("slices", "slices", plan.sliceIndices.size(),
                             plan.hartid, os);
     emitPlanArrayAssignment("init_l2_reads", "init_l2_reads",
@@ -651,7 +674,7 @@ void emitDebugHeader(const MagiaHeaderModel &model, llvm::raw_ostream &os) {
   emitTileOpDescriptors(model, os);
   emitTileSendDescriptors(model, os);
   emitTileL2WriteDescriptors(model, os);
-  emitClearMailbox(os);
+  emitFifoStorageHelper(os);
   emitExecuteOp(os);
   emitFillPlan(model, os);
   emitFirstOutputChecker(model, os);

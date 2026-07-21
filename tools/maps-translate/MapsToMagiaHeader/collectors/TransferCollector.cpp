@@ -112,15 +112,18 @@ static LogicalResult collectTileRecv(Operation *recvOp, RunCollectionState &stat
   recv.srcHartid = srcHartid.getInt();
   recv.dstHartid = dstHartid.getInt();
   recv.dstSubsliceIndex = dstSubsliceIndex;
-  recv.readyFlagId = 0;
+  noteTile(model, recv.dstHartid);
+  // FIFO rings are destination-local and single-producer.  Each MAPS
+  // transition therefore receives a compact, stable sub-ring index.
+  recv.producerIdx = model.tilePlans[recv.dstHartid].recvIndices.size();
 
   unsigned recvIndex = addGeneratedRecv(model, recv);
-  noteTile(model, recv.dstHartid);
   model.tilePlans[recv.dstHartid].recvIndices.push_back(recvIndex);
 
   // Remember the destination endpoint for the matching send and for later users
   // of the recv result value.
-  state.tileRecvs[channel] = TileRecvInfo{dstSliceIndex, dstSubsliceIndex};
+  state.tileRecvs[channel] =
+      TileRecvInfo{dstSliceIndex, dstSubsliceIndex, recv.producerIdx};
   state.valueSubsliceIndices[recvOp->getResult(0)] = dstSubsliceIndex;
   return success();
 
@@ -259,7 +262,7 @@ LogicalResult collectProducedSend(Operation *sendOp, RunCollectionState &state,
   send.dstL1DataBase = kGeneratedL1DataBaseOffset;
   send.dstSliceL1OffsetBytes = dstSlice.l1OffsetBytes;
   send.dstSliceSlotBytes = dstSlice.slotBytes;
-  send.readyFlagId = 0;
+  send.producerIdx = recvInfo->second.producerIdx;
 
   unsigned sendIndex = addGeneratedSend(model, send);
   noteTile(model, send.srcHartid);

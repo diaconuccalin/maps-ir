@@ -33,6 +33,7 @@ struct ProducedSliceSource {
 struct TileRecvInfo {
   unsigned dstSliceIndex = 0;
   unsigned dstSubsliceIndex = 0;
+  unsigned producerIdx = 0;
 };
 
 struct OutputInsertInfo {
