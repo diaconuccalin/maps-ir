@@ -576,6 +576,8 @@ static void emitExecuteOp(llvm::raw_ostream &os) {
   os << "    uint32_t lhs = local_subslice_addr(plan, &op->inputs[0], slot);\n";
   os << "    uint32_t rhs = local_subslice_addr(plan, &op->inputs[1], slot);\n";
   os << "    uint32_t out = local_subslice_addr(plan, &op->outputs[0], slot);\n\n";
+  os << "    if (op->outputs[0].elem_type != ELEM_F16)\n";
+  os << "      return -1;\n";
   os << "    maps_generated_zero_l1_bytes(\n";
   os << "        out, op->params[0] * op->params[2] * sizeof(float16));\n";
   os << "    maps_matmul_redmule(runtime->redmule_ctrl, runtime->eu_ctrl,\n";
@@ -592,6 +594,8 @@ static void emitExecuteOp(llvm::raw_ostream &os) {
   os << "    uint32_t bias = op->num_inputs == 3u\n";
   os << "        ? local_subslice_addr(plan, &op->inputs[2], slot) : 0u;\n";
   os << "    uint32_t output = local_subslice_addr(plan, &op->outputs[0], slot);\n\n";
+  os << "    if (op->outputs[0].elem_type != ELEM_F16)\n";
+  os << "      return -1;\n";
   os << "    maps_conv2d_nchw_f16(\n";
   os << "        (float16 *)output, (const float16 *)input,\n";
   os << "        (const float16 *)weight,\n";
@@ -608,6 +612,8 @@ static void emitExecuteOp(llvm::raw_ostream &os) {
   os << "  if (op->kind == OP_LOG) {\n";
   os << "    uint32_t in = local_subslice_addr(plan, &op->inputs[0], slot);\n";
   os << "    uint32_t out = local_subslice_addr(plan, &op->outputs[0], slot);\n\n";
+  os << "    if (op->outputs[0].elem_type != ELEM_F16)\n";
+  os << "      return -1;\n";
   os << "    maps_log_f16((float16 *)out, (const float16 *)in,\n";
   os << "                 (int32_t)op->params[2]);\n";
   os << "    return 0;\n";
@@ -616,9 +622,12 @@ static void emitExecuteOp(llvm::raw_ostream &os) {
   os << "    uint32_t lhs = local_subslice_addr(plan, &op->inputs[0], slot);\n";
   os << "    uint32_t rhs = local_subslice_addr(plan, &op->inputs[1], slot);\n";
   os << "    uint32_t out = local_subslice_addr(plan, &op->outputs[0], slot);\n\n";
-  os << "    maps_add_f16((float16 *)out, (const float16 *)lhs,\n";
-  os << "                 (const float16 *)rhs, (int32_t)op->params[2]);\n";
-  os << "    return 0;\n";
+  os << "    if (op->outputs[0].elem_type == ELEM_F16) {\n";
+  os << "      maps_add_f16((float16 *)out, (const float16 *)lhs,\n";
+  os << "                   (const float16 *)rhs, (int32_t)op->params[2]);\n";
+  os << "      return 0;\n";
+  os << "    }\n";
+  os << "    return maps_execute_builtin_op(plan, op, slot);\n";
   os << "  }\n\n";
   os << "  return maps_execute_builtin_op(plan, op, slot);\n";
   os << "}\n\n";

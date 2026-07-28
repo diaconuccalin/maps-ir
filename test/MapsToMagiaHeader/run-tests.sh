@@ -52,6 +52,10 @@ grep -q 'MAPS_GENERATED_NUM_TOKEN_SLOTS 3u' "${test_dir}/conv2d_generated.h"
 grep -q 'MAPS_NUM_TOKEN_SLOTS disagrees with the planned execution contract' \
   "${test_dir}/conv2d_generated.h"
 grep -q '.kind = OP_CONV2D' "${test_dir}/conv2d_generated.h"
+grep -q 'op->outputs\[0\].elem_type != ELEM_F16' \
+  "${test_dir}/conv2d_generated.h"
+grep -q 'op->outputs\[0\].elem_type == ELEM_F16' \
+  "${test_dir}/conv2d_generated.h"
 grep -q '.params = {2u, 2u, 1u, 2u, 1u, 1u, 0u, 0u}' \
   "${test_dir}/conv2d_generated.h"
 
