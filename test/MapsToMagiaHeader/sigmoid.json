@@ -1,0 +1,124 @@
+{
+  "name": "sigmoid",
+  "execution": {"num_token_slots": 2},
+  "bundle": {
+    "schema_version": 1,
+    "weights_file": "sigmoid.weights.bin",
+    "weights_size": 4,
+    "weights_sha256": "3cadcc694b8014a8d342ffef5050d775a0385dea6ee03fb8753ca85404af2903",
+    "alignment": 16,
+    "endianness": "little"
+  },
+  "mesh": {
+    "width": 1,
+    "height": 1,
+    "l2_memory": {"size": 1048576},
+    "tiles": [{"tile_id": 0, "x": 0, "y": 0}]
+  },
+  "tensors": [
+    {
+      "name": "x",
+      "rank": 2,
+      "dims": [2, 2],
+      "elem_bytes": 2,
+      "is_initializer": false
+    },
+    {
+      "name": "y",
+      "rank": 2,
+      "dims": [2, 2],
+      "elem_bytes": 2,
+      "is_initializer": false
+    }
+  ],
+  "initializations": [
+    {
+      "name": "init_x",
+      "tensor_id": 0,
+      "fragments": [
+        {
+          "src_hartid": -1,
+          "dst_hartid": 0,
+          "src_slice": {
+            "dims": [
+              {"start": 0, "length": 2},
+              {"start": 0, "length": 2}
+            ]
+          },
+          "dst_slice": {
+            "dims": [
+              {"start": 0, "length": 2},
+              {"start": 0, "length": 2}
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "stages": [
+    {
+      "name": "sigmoid",
+      "submesh": {"tile_ids": [0]},
+      "virtual_to_physical": {"0": 0},
+      "layers": [
+        {
+          "node": {
+            "name": "sigmoid",
+            "kind": 1,
+            "inputs": [
+              {"name": "x", "rank": 2, "dims": [2, 2], "elem_bytes": 2}
+            ],
+            "outputs": [
+              {"name": "y", "rank": 2, "dims": [2, 2], "elem_bytes": 2}
+            ],
+            "payload": {
+              "op_name": "Sigmoid",
+              "work_kind": "SIGMOID"
+            },
+            "attributes": {}
+          },
+          "inputs": [
+            {"tensor_id": 0, "source": {"base_addr": 1}}
+          ],
+          "outputs": [
+            {
+              "tensor_id": 1,
+              "layout": {
+                "submesh": {"tile_ids": [0]},
+                "mesh_x": {"mode": 0, "tensor_axis": 1},
+                "mesh_y": {"mode": 0, "tensor_axis": 0},
+                "logical_width": 1,
+                "logical_height": 1
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "transitions": [],
+  "finalizations": [
+    {
+      "name": "output_y",
+      "tensor_id": 1,
+      "fragments": [
+        {
+          "src_hartid": 0,
+          "dst_hartid": -1,
+          "src_slice": {
+            "dims": [
+              {"start": 0, "length": 2},
+              {"start": 0, "length": 2}
+            ]
+          },
+          "dst_slice": {
+            "dims": [
+              {"start": 0, "length": 2},
+              {"start": 0, "length": 2}
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

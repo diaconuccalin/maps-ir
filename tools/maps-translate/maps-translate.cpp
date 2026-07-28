@@ -1,7 +1,8 @@
+#include "JsonToMaps.h"
+
 #include "mlir/Tools/mlir-translate/MlirTranslateMain.h"
 
 namespace mlir::maps {
-void registerJsonToMapsTranslation();
 void registerMapsToMagiaHeaderTranslation();
 }
 

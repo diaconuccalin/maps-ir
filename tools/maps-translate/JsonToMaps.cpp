@@ -1,3 +1,5 @@
+#include "JsonToMaps.h"
+
 // Translation registration function
 #include "mlir/Tools/mlir-translate/Translation.h"
 
@@ -24,6 +26,7 @@
 
 // Abstract data types
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/DenseSet.h"
@@ -89,6 +92,10 @@ static bool isInitializerTensor(const llvm::json::Object &tensor) {
 static Type parseElementType(const llvm::json::Object &tensor,
                              OpBuilder &builder) {
     std::optional<StringRef> dtype = tensor.getString("dtype");
+    if (auto *initializer = tensor.getObject("initializer")) {
+        if (auto packedDtype = initializer->getString("dtype"))
+            dtype = packedDtype;
+    }
     
     if (!dtype) {
         if (std::optional<int64_t> elemBytes = tensor.getInteger("elem_bytes")) {
@@ -652,7 +659,12 @@ static RankedTensorType parseTensorType(const llvm::json::Object &tensor,
 static std::optional<RankedTensorType>
 parseTileOutputType(const llvm::json::Object &tensor,
                     const llvm::json::Object &output, const Tile &tile,
-                    const Stage &stage, Type elementType) {
+                    const Stage &stage, Type elementType);
+
+static std::optional<SmallVector<SliceDim>>
+parseTileOutputSlice(const llvm::json::Object &tensor,
+                     const llvm::json::Object &output, const Tile &tile,
+                     const Stage &stage) {
     auto *dimsJson = tensor.getArray("dims");
     auto *layout = output.getObject("layout");
     auto *submesh = layout ? layout->getObject("submesh") : nullptr;
@@ -697,12 +709,12 @@ parseTileOutputType(const llvm::json::Object &tensor,
     int64_t logicalX = *ordinal % *logicalWidth;
     int64_t logicalY = *ordinal / *logicalWidth;
 
-    SmallVector<int64_t> dims;
+    SmallVector<SliceDim> dims;
     for (const llvm::json::Value &dimValue : *dimsJson) {
         auto dim = dimValue.getAsInteger();
         if (!dim)
             return std::nullopt;
-        dims.push_back(*dim);
+        dims.push_back({0, *dim});
     }
 
     auto shardDimension = [&](const llvm::json::Object &mapping, int64_t parts,
@@ -715,14 +727,171 @@ parseTileOutputType(const llvm::json::Object &tensor,
         auto axis = mapping.getInteger("tensor_axis");
         if (!axis || *axis < 0 || static_cast<size_t>(*axis) >= dims.size())
             return false;
-        dims[*axis] = partitionDim(dims[*axis], parts, index).length;
+        dims[*axis] = partitionDim(dims[*axis].length, parts, index);
         return true;
     };
 
     if (!shardDimension(*meshX, *logicalWidth, logicalX) ||
         !shardDimension(*meshY, *logicalHeight, logicalY))
         return std::nullopt;
-    return RankedTensorType::get(dims, elementType);
+    return dims;
+}
+
+static std::optional<RankedTensorType>
+parseTileOutputType(const llvm::json::Object &tensor,
+                    const llvm::json::Object &output, const Tile &tile,
+                    const Stage &stage, Type elementType) {
+    auto dims = parseTileOutputSlice(tensor, output, tile, stage);
+    if (!dims)
+        return std::nullopt;
+
+    SmallVector<int64_t> shape;
+    shape.reserve(dims->size());
+    for (const SliceDim &dim : *dims)
+        shape.push_back(dim.length);
+    return RankedTensorType::get(shape, elementType);
+}
+
+static std::optional<StringRef>
+getDescriptorKernelKind(const llvm::json::Object &payload) {
+    auto workKind = payload.getString("work_kind");
+    auto opName = payload.getString("op_name");
+    StringRef kind = workKind ? *workKind : opName.value_or("");
+    if (kind.empty() && payload.getBoolean("transpose_w").value_or(false))
+        kind = "MATMUL";
+
+    if (kind == "AllReduceSum" || kind == "AllReduceMax")
+        return kind;
+
+    static constexpr StringLiteral supportedKinds[] = {
+        "ABS",          "ADD",          "DEPTHWISE_CONV", "DIV",
+        "EXP",          "GROUP_NORMALIZE", "GROUP_REDUCE", "LOG",
+        "MATMUL",       "MUL",          "NEG",            "POW",
+        "REDUCE_MAX",
+        "REDUCE_SUM",   "RELU",         "RESHAPE",        "SIGMOID",
+        "SLICE",        "SQRT",         "SUB",            "TRANSPOSE",
+    };
+    for (StringRef supported : supportedKinds) {
+        if (kind == supported)
+            return kind;
+    }
+    return std::nullopt;
+}
+
+static int64_t getF32ParameterBits(double value) {
+    llvm::APFloat parameter(static_cast<float>(value));
+    return static_cast<int64_t>(parameter.bitcastToAPInt().getZExtValue());
+}
+
+static std::optional<SmallVector<int64_t>>
+getDescriptorKernelParams(StringRef kind, const llvm::json::Object &payload) {
+    SmallVector<int64_t> params;
+
+    if (kind == "DEPTHWISE_CONV") {
+        auto strides = parseIntArrayField(payload, "strides");
+        auto dilations = parseIntArrayField(payload, "dilations");
+        auto pads = parseIntArrayField(payload, "pads");
+        if (!strides || strides->size() != 2 || !dilations ||
+            dilations->size() != 2 || !pads || pads->size() != 4)
+            return std::nullopt;
+        params.append(*strides);
+        params.append(*dilations);
+        params.append(*pads);
+    } else if (kind == "REDUCE_MAX" || kind == "REDUCE_SUM") {
+        auto axis = payload.getInteger("axis");
+        if (!axis)
+            return std::nullopt;
+        params.push_back(*axis);
+    } else if (kind == "GROUP_REDUCE") {
+        auto groups = payload.getInteger("num_groups");
+        if (!groups)
+            return std::nullopt;
+        params.push_back(*groups);
+    } else if (kind == "GROUP_NORMALIZE") {
+        auto groups = payload.getInteger("num_groups");
+        auto epsilon = payload.getNumber("epsilon");
+        if (!groups || !epsilon)
+            return std::nullopt;
+        params.push_back(*groups);
+        params.push_back(getF32ParameterBits(*epsilon));
+    } else if (kind == "MUL") {
+        if (auto factor = payload.getNumber("factor"))
+            params.push_back(getF32ParameterBits(*factor));
+    } else if (kind == "TRANSPOSE") {
+        auto permutation = parseIntArrayField(payload, "permutation");
+        if (!permutation || permutation->size() > 8)
+            return std::nullopt;
+        params.append(*permutation);
+    } else if (kind == "SLICE") {
+        auto offsets = parseIntArrayField(payload, "offsets");
+        if (!offsets || offsets->size() > 8)
+            return std::nullopt;
+        params.append(*offsets);
+    } else if (kind == "AllReduceSum" || kind == "AllReduceMax") {
+        auto axis = payload.getString("collective_axis");
+        if (!axis || (*axis != "x" && *axis != "y"))
+            return std::nullopt;
+        params.push_back(*axis == "x" ? 0 : 1);
+    }
+
+    return params;
+}
+
+static FailureOr<Value> emitDescriptorKernel(
+    Location loc, const llvm::json::Object &node,
+    const llvm::json::Array &inputs, const llvm::json::Object &output,
+    const Tile &tile, const Stage &stage, OpBuilder &builder,
+    llvm::DenseMap<int64_t, Value> &tileValues) {
+    auto *payload = node.getObject("payload");
+    auto *nodeOutputs = node.getArray("outputs");
+    auto *nodeOutput =
+        nodeOutputs && !nodeOutputs->empty() ? (*nodeOutputs)[0].getAsObject()
+                                            : nullptr;
+    if (!payload || !nodeOutput)
+        return failure();
+
+    auto kind = getDescriptorKernelKind(*payload);
+    if (!kind)
+        return failure();
+    auto params = getDescriptorKernelParams(*kind, *payload);
+    if (!params)
+        return failure();
+
+    SmallVector<Value> inputValues;
+    for (const llvm::json::Value &input : inputs) {
+        auto tensorId = getTensorId(input);
+        Value value = tensorId ? tileValues.lookup(*tensorId) : Value{};
+        if (!value)
+            return failure();
+        inputValues.push_back(value);
+    }
+    if (inputValues.empty())
+        return failure();
+
+    auto inputType = dyn_cast<RankedTensorType>(inputValues.front().getType());
+    auto outputType =
+        inputType ? parseTileOutputType(*nodeOutput, output, tile, stage,
+                                        inputType.getElementType())
+                  : std::nullopt;
+    if (!outputType)
+        return failure();
+
+    if (*kind == "MATMUL") {
+        auto lhsType = dyn_cast<RankedTensorType>(inputValues[0].getType());
+        if (!lhsType || lhsType.getRank() != 2 || outputType->getRank() != 2)
+            return failure();
+        params->clear();
+        params->append(
+            {lhsType.getShape()[0], lhsType.getShape()[1],
+             outputType->getShape()[1], 1});
+    }
+
+    OperationState state(loc, maps::KernelOp::getOperationName());
+    state.addOperands(inputValues);
+    state.addTypes(*outputType);
+    state.addAttribute("kind", builder.getStringAttr(*kind));
+    state.addAttribute("params", builder.getDenseI64ArrayAttr(*params));
+    return builder.create(state)->getResult(0);
 }
 
 
@@ -1121,8 +1290,7 @@ static std::optional<llvm::SetVector<int64_t>> collectInputTensorIds(const llvm:
     return ids;
 }
 
-static OwningOpRef<Operation *> importJsonToMaps(StringRef input, 
-    MLIRContext *ctx) {
+OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
 
     ctx->loadDialect<maps::MapsDialect, 
         func::FuncDialect,
@@ -1151,6 +1319,40 @@ static OwningOpRef<Operation *> importJsonToMaps(StringRef input,
     auto module = ModuleOp::create(loc);
     module->setAttr("maps.name", builder.getStringAttr(*netName));
 
+    auto *execution = root->getObject("execution");
+    auto numTokenSlots = execution
+        ? execution->getInteger("num_token_slots")
+        : std::optional<int64_t>();
+    if (!numTokenSlots || *numTokenSlots <= 0) {
+        llvm::errs() << "missing or invalid execution.num_token_slots\n";
+        return {};
+    }
+    module->setAttr("maps.num_token_slots",
+                    builder.getI64IntegerAttr(*numTokenSlots));
+
+    if (auto *bundle = root->getObject("bundle")) {
+        DictionaryAttr bundleAttr = parseJsonObject(*bundle, builder);
+        if (!bundleAttr) {
+            llvm::errs() << "invalid deployment bundle metadata\n";
+            return {};
+        }
+        module->setAttr("maps.bundle", bundleAttr);
+    }
+
+    if (auto *mesh = root->getObject("mesh")) {
+        if (auto width = mesh->getInteger("width"))
+            module->setAttr("maps.mesh_width",
+                            builder.getI64IntegerAttr(*width));
+        if (auto height = mesh->getInteger("height"))
+            module->setAttr("maps.mesh_height",
+                            builder.getI64IntegerAttr(*height));
+        if (auto *l2 = mesh->getObject("l2_memory")) {
+            if (auto capacity = l2->getInteger("size"))
+                module->setAttr("maps.l2_capacity_bytes",
+                                builder.getI64IntegerAttr(*capacity));
+        }
+    }
+
     SmallVector<Type> inputTypes;
 
     for (int64_t tensorId : inputTensorIds) {
@@ -1164,6 +1366,25 @@ static OwningOpRef<Operation *> importJsonToMaps(StringRef input,
 
     FunctionType funcType = builder.getFunctionType(inputTypes, {});
     func::FuncOp mainFunc = func::FuncOp::create(builder, loc, "main", funcType);
+
+    for (auto indexed : llvm::enumerate(inputTensorIds)) {
+        auto *tensor = (*tensors)[indexed.value()].getAsObject();
+        if (!tensor)
+            return {};
+        if (auto name = tensor->getString("name"))
+            mainFunc.setArgAttr(indexed.index(), "maps.global_name",
+                                builder.getStringAttr(*name));
+        if (auto *initializer = tensor->getObject("initializer")) {
+            DictionaryAttr initializerAttr = parseJsonObject(*initializer, builder);
+            if (!initializerAttr) {
+                llvm::errs() << "invalid initializer metadata for tensor "
+                             << indexed.value() << "\n";
+                return {};
+            }
+            mainFunc.setArgAttr(indexed.index(), "maps.initializer",
+                                initializerAttr);
+        }
+    }
 
     Block *mainEntry = mainFunc.addEntryBlock();
 
@@ -1571,6 +1792,26 @@ static OwningOpRef<Operation *> importJsonToMaps(StringRef input,
                 }
 
                 if (*nodeKind == 0) {
+                    auto *payload = node->getObject("payload");
+                    bool transposeW =
+                        payload &&
+                        payload->getBoolean("transpose_w").value_or(false);
+                    if (transposeW) {
+                        auto *output = (*outputs)[0].getAsObject();
+                        auto kernel = output
+                            ? emitDescriptorKernel(
+                                  loc, *node, *inputs, *output, tileObj,
+                                  stageObj, builder, tileValues)
+                            : FailureOr<Value>(failure());
+                        if (failed(kernel)) {
+                            llvm::errs()
+                                << "unsupported transposed Matmul descriptor\n";
+                            return {};
+                        }
+                        tileValues[*outputTensorId] = *kernel;
+                        continue;
+                    }
+
                     if (inputs->size() < 2) {
                         llvm::errs() << "unsupported Matmul node: expected two inputs\n";
                         return {};
@@ -1625,11 +1866,30 @@ static OwningOpRef<Operation *> importJsonToMaps(StringRef input,
                 if (*nodeKind == 4) {
                     auto *payload = node->getObject("payload");
                     auto opName = payload ? payload->getString("op_name") : std::nullopt;
+                    auto workKind =
+                        payload ? payload->getString("work_kind") : std::nullopt;
                     auto *nodeOutputs = node->getArray("outputs");
                     auto *nodeOutput = nodeOutputs && !nodeOutputs->empty()
                                            ? (*nodeOutputs)[0].getAsObject()
                                            : nullptr;
                     auto *output = (*outputs)[0].getAsObject();
+                    if (workKind &&
+                        (*workKind == "RESHAPE" || *workKind == "SLICE" ||
+                         *workKind == "TRANSPOSE")) {
+                        auto kernel = output
+                            ? emitDescriptorKernel(
+                                  loc, *node, *inputs, *output, tileObj,
+                                  stageObj, builder, tileValues)
+                            : FailureOr<Value>(failure());
+                        if (failed(kernel)) {
+                            llvm::errs()
+                                << "unsupported transform descriptor work_kind="
+                                << *workKind << "\n";
+                            return {};
+                        }
+                        tileValues[*outputTensorId] = *kernel;
+                        continue;
+                    }
                     if (!opName || !nodeOutput || !output || inputs->empty()) {
                         llvm::errs() << "unsupported transform MAPS node: missing metadata\n";
                         return {};
@@ -1672,9 +1932,159 @@ static OwningOpRef<Operation *> importJsonToMaps(StringRef input,
                 }
 
                 if (*nodeKind == 3) {
-                    llvm::errs() << "unsupported MAPS operation Conv: export an explicit "
-                                    "im2col/matmul decomposition before translation\n";
-                    return {};
+                    auto *payload = node->getObject("payload");
+                    auto workKind =
+                        payload ? payload->getString("work_kind") : std::nullopt;
+                    auto *nodeInputs = node->getArray("inputs");
+                    auto *nodeOutputs = node->getArray("outputs");
+                    auto *nodeOutput =
+                        nodeOutputs && !nodeOutputs->empty()
+                            ? (*nodeOutputs)[0].getAsObject()
+                            : nullptr;
+                    auto *output = (*outputs)[0].getAsObject();
+                    if (workKind == "DEPTHWISE_CONV") {
+                        auto kernel = output
+                            ? emitDescriptorKernel(
+                                  loc, *node, *inputs, *output, tileObj,
+                                  stageObj, builder, tileValues)
+                            : FailureOr<Value>(failure());
+                        if (failed(kernel)) {
+                            llvm::errs()
+                                << "unsupported DepthwiseConv descriptor\n";
+                            return {};
+                        }
+                        tileValues[*outputTensorId] = *kernel;
+                        continue;
+                    }
+                    if (!payload || workKind != "CONV2D" || !nodeInputs ||
+                        nodeInputs->size() < 2 || nodeInputs->size() > 3 ||
+                        !nodeOutput || !output ||
+                        inputs->size() != nodeInputs->size()) {
+                        llvm::errs() << "unsupported Conv2D node: invalid metadata\n";
+                        return {};
+                    }
+
+                    SmallVector<Value> inputValues;
+                    for (const llvm::json::Value &input : *inputs) {
+                        auto tensorId = getTensorId(input);
+                        Value value =
+                            tensorId ? tileValues.lookup(*tensorId) : Value{};
+                        if (!value) {
+                            llvm::errs()
+                                << "unsupported Conv2D node: missing local input value\n";
+                            return {};
+                        }
+                        inputValues.push_back(value);
+                    }
+
+                    auto inputType =
+                        dyn_cast<RankedTensorType>(inputValues[0].getType());
+                    auto weightType =
+                        dyn_cast<RankedTensorType>(inputValues[1].getType());
+                    auto outputType = inputType
+                        ? parseTileOutputType(
+                              *nodeOutput, *output, tileObj, stageObj,
+                              inputType.getElementType())
+                        : std::nullopt;
+                    auto outputSlice =
+                        parseTileOutputSlice(
+                            *nodeOutput, *output, tileObj, stageObj);
+                    auto strides = parseIntArrayField(*payload, "strides");
+                    auto dilations = parseIntArrayField(*payload, "dilations");
+                    auto pads = parseIntArrayField(*payload, "pads");
+                    auto *globalInput = (*nodeInputs)[0].getAsObject();
+                    auto *globalWeight = (*nodeInputs)[1].getAsObject();
+                    auto globalInputDims =
+                        globalInput
+                            ? parseIntArrayField(*globalInput, "dims")
+                            : std::nullopt;
+                    auto globalWeightDims =
+                        globalWeight
+                            ? parseIntArrayField(*globalWeight, "dims")
+                            : std::nullopt;
+                    if (!inputType || !weightType || inputType.getRank() != 4 ||
+                        weightType.getRank() != 4 || !outputType ||
+                        outputType->getRank() != 4 || !outputSlice ||
+                        outputSlice->size() != 4 || !strides ||
+                        strides->size() != 2 || !dilations ||
+                        dilations->size() != 2 || !pads || pads->size() != 4 ||
+                        !globalInputDims || globalInputDims->size() != 4 ||
+                        !globalWeightDims || globalWeightDims->size() != 4) {
+                        llvm::errs() << "unsupported Conv2D node: invalid geometry\n";
+                        return {};
+                    }
+                    if (!isa<FloatType>(inputType.getElementType()) ||
+                        weightType.getElementType() != inputType.getElementType() ||
+                        outputType->getElementType() != inputType.getElementType() ||
+                        (inputValues.size() == 3 &&
+                         cast<RankedTensorType>(inputValues[2].getType())
+                                 .getElementType() != inputType.getElementType())) {
+                        llvm::errs() << "unsupported Conv2D node: inputs and output "
+                                        "must use one floating-point type\n";
+                        return {};
+                    }
+
+                    const SliceDim outputH = (*outputSlice)[2];
+                    const SliceDim outputW = (*outputSlice)[3];
+                    int64_t theoreticalHStart =
+                        outputH.start * (*strides)[0] - (*pads)[0];
+                    int64_t theoreticalWStart =
+                        outputW.start * (*strides)[1] - (*pads)[1];
+                    int64_t theoreticalHEnd = theoreticalHStart;
+                    int64_t theoreticalWEnd = theoreticalWStart;
+                    if (outputH.length > 0) {
+                        theoreticalHEnd =
+                            (outputH.start + outputH.length - 1) *
+                                (*strides)[0] -
+                            (*pads)[0] +
+                            (*dilations)[0] * ((*globalWeightDims)[2] - 1) +
+                            1;
+                    }
+                    if (outputW.length > 0) {
+                        theoreticalWEnd =
+                            (outputW.start + outputW.length - 1) *
+                                (*strides)[1] -
+                            (*pads)[1] +
+                            (*dilations)[1] * ((*globalWeightDims)[3] - 1) +
+                            1;
+                    }
+                    SmallVector<int64_t> localPadding = {
+                        std::max<int64_t>(0, -theoreticalHStart),
+                        std::max<int64_t>(0, -theoreticalWStart),
+                        std::max<int64_t>(
+                            0, theoreticalHEnd - (*globalInputDims)[2]),
+                        std::max<int64_t>(
+                            0, theoreticalWEnd - (*globalInputDims)[3]),
+                    };
+
+                    OperationState state(loc, maps::Conv2DOp::getOperationName());
+                    state.addOperands(inputValues);
+                    state.addTypes(*outputType);
+                    state.addAttribute(
+                        "strides", builder.getDenseI64ArrayAttr(*strides));
+                    state.addAttribute(
+                        "dilations", builder.getDenseI64ArrayAttr(*dilations));
+                    state.addAttribute(
+                        "padding", builder.getDenseI64ArrayAttr(localPadding));
+                    Operation *conv = builder.create(state);
+                    tileValues[*outputTensorId] = conv->getResult(0);
+                    continue;
+                }
+
+                if (*nodeKind == 2 || *nodeKind == 255) {
+                    auto *output = (*outputs)[0].getAsObject();
+                    auto kernel = output
+                        ? emitDescriptorKernel(
+                              loc, *node, *inputs, *output, tileObj, stageObj,
+                              builder, tileValues)
+                        : FailureOr<Value>(failure());
+                    if (failed(kernel)) {
+                        llvm::errs() << "unsupported MAPS descriptor node kind "
+                                     << *nodeKind << "\n";
+                        return {};
+                    }
+                    tileValues[*outputTensorId] = *kernel;
+                    continue;
                 }
 
                 if (*nodeKind != 1 || inputs->empty()) {
@@ -1684,6 +2094,20 @@ static OwningOpRef<Operation *> importJsonToMaps(StringRef input,
 
                 auto *payload = node->getObject("payload");
                 auto opName = payload ? payload->getString("op_name") : std::nullopt;
+                if (!opName ||
+                    (*opName != "Exp" && *opName != "Log" &&
+                     *opName != "Add")) {
+                    auto *output = (*outputs)[0].getAsObject();
+                    auto kernel = output
+                        ? emitDescriptorKernel(
+                              loc, *node, *inputs, *output, tileObj, stageObj,
+                              builder, tileValues)
+                        : FailureOr<Value>(failure());
+                    if (succeeded(kernel)) {
+                        tileValues[*outputTensorId] = *kernel;
+                        continue;
+                    }
+                }
                 if (!opName) {
                     llvm::errs() << "unsupported elementwise MAPS node: missing op_name\n";
                     return {};

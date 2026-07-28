@@ -186,4 +186,49 @@ def LoadOp : Maps_Op<"load"> {
   }];
 }
 
+def Conv2DOp : Maps_Op<"conv2d"> {
+  let summary = "Execute one tile-local dense NCHW convolution";
+
+  let description = [{
+    `maps.conv2d` consumes a clamped tile-local NCHW activation, an OIHW
+    weight slice, and an optional output-channel bias slice.  Its padding is
+    tile-local: it records the elements missing from the clamped activation
+    halo on this tile, not merely the Source Model's global padding.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input,
+    AnyRankedTensor:$weight,
+    Optional<AnyRankedTensor>:$bias,
+    DenseI64ArrayAttr:$strides,
+    DenseI64ArrayAttr:$dilations,
+    DenseI64ArrayAttr:$padding
+  );
+
+  let results = (outs
+    AnyRankedTensor:$output
+  );
+}
+
+def KernelOp : Maps_Op<"kernel"> {
+  let summary = "Describe one tile-local backend kernel";
+
+  let description = [{
+    `maps.kernel` preserves a planned tile-local operation through maps-ir and
+    MAGIA descriptor generation before a matching runtime implementation
+    exists. `kind` names the handwritten deployment ABI operation and `params`
+    contains its operation-specific scalar parameters.
+  }];
+
+  let arguments = (ins
+    Variadic<AnyRankedTensor>:$inputs,
+    StrAttr:$kind,
+    DenseI64ArrayAttr:$params
+  );
+
+  let results = (outs
+    AnyRankedTensor:$output
+  );
+}
+
 #endif // MAPS_OPS
