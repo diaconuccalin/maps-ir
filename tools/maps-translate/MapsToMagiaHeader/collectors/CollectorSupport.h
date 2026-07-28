@@ -22,6 +22,12 @@ struct L2SourceInfo {
   std::string globalName;
   RankedTensorType globalType;
   SmallVector<int64_t> fullOffset;
+  bool isConstant = false;
+  uint64_t packedImageOffset = 0;
+  uint64_t packedByteSize = 0;
+  std::string packedDtype;
+  SmallVector<int64_t> packedShape;
+  uint64_t requiredAlignment = kGeneratedL2AlignmentBytes;
 };
 
 struct ProducedSliceSource {
@@ -46,7 +52,9 @@ struct RunCollectionState {
   llvm::StringMap<unsigned> aggregateSliceIndices;
   llvm::StringMap<OutputInsertInfo> outputInserts;
   llvm::StringMap<unsigned> producedSliceIndices;
+  llvm::DenseMap<Value, unsigned> producedValueIds;
   llvm::DenseMap<Value, unsigned> valueSubsliceIndices;
+  unsigned nextProducedValueId = 0;
 };
 
 Operation *findParentNamed(Operation *op, StringRef name);
@@ -59,7 +67,7 @@ std::string getAggregateSliceKey(int64_t hartid, StringRef baseName,
                                  ArrayRef<int64_t> parentSlice);
 SmallVector<int64_t> getPairwiseOffsets(ArrayRef<int64_t> values);
 SmallVector<int64_t> getPairwiseLengths(ArrayRef<int64_t> values);
-std::string getProducedValueKey(Value value);
+std::string getProducedValueKey(RunCollectionState &state, Value value);
 
 } // namespace mlir::maps
 

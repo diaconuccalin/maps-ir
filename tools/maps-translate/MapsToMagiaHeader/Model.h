@@ -22,10 +22,12 @@ static constexpr uint64_t kGeneratedL1DataBaseOffset = 0ull;
 static constexpr uint64_t kGeneratedL1AlignmentBytes = 16ull;
 static constexpr uint64_t kGeneratedReadyFlagsOffset = 0xD0000ull;
 static constexpr unsigned kGeneratedReadyFlagsWords = 4096;
-static constexpr uint64_t kMagiaL2Base = 0xCC000000ull;
-static constexpr uint64_t kMagiaL2End = 0xCCFF0000ull;
+static constexpr unsigned kGeneratedDescriptorMaxDims = 6;
+static constexpr unsigned kGeneratedOperationAbiVersion = 1;
+static constexpr unsigned kGeneratedDescriptorAbiVersion = 1;
+static constexpr uint64_t kMagiaL2Base = 0xCC010000ull;
+static constexpr uint64_t kMagiaL2End = 0xCCF10000ull;
 static constexpr uint64_t kGeneratedL2AlignmentBytes = 16ull;
-static constexpr unsigned kDefaultNumTokenSlots = 2;
 static constexpr unsigned kDefaultNumTokens = 1;
 
 enum class GeneratedGlobalKind {
@@ -37,9 +39,29 @@ enum class GeneratedGlobalKind {
 
 enum class GeneratedOpKind {
   Matmul,
+  Conv2D,
+  DepthwiseConv,
+  Abs,
   Add,
+  Div,
   Log,
   Exp,
+  GroupNormalize,
+  GroupReduce,
+  Mul,
+  Neg,
+  Pow,
+  ReduceMax,
+  ReduceSum,
+  Relu,
+  Reshape,
+  Sigmoid,
+  Slice,
+  Sqrt,
+  Sub,
+  Transpose,
+  AllReduceMax,
+  AllReduceSum,
   Copy,
 };
 
@@ -88,6 +110,12 @@ struct GeneratedL2Global {
   uint64_t tokenStrideBytes = 0;
   unsigned numTokens = 1;
   SmallVector<uint64_t> stridesBytes;
+  bool isConstant = false;
+  uint64_t packedImageOffset = 0;
+  uint64_t packedByteSize = 0;
+  std::string packedDtype;
+  SmallVector<int64_t> packedShape;
+  uint64_t requiredAlignment = kGeneratedL2AlignmentBytes;
 };
 
 struct GeneratedL2Read {
@@ -153,8 +181,20 @@ struct GeneratedTilePlan {
 };
 
 struct MagiaHeaderModel {
+  std::string outputStem = "model";
+  std::string sourceModelName;
+  unsigned meshWidth = 0;
+  unsigned meshHeight = 0;
+  std::string weightsFile;
+  std::string weightsSha256;
+  uint64_t weightsSize = 0;
+  uint64_t weightsAlignment = kGeneratedL2AlignmentBytes;
+  uint64_t l2Base = kMagiaL2Base;
+  uint64_t l2End = kMagiaL2End;
+  bool hasPackedWeights = false;
+  bool randomizeInputs = false;
   unsigned numTokens = kDefaultNumTokens;
-  unsigned numTokenSlots = kDefaultNumTokenSlots;
+  unsigned numTokenSlots = 0;
   unsigned nextGlobalId = 0;
   unsigned nextTransitionId = 0;
   llvm::StringMap<unsigned> globalIds;
@@ -198,7 +238,8 @@ LogicalResult getOrCreateL2Global(MagiaHeaderModel &model,
                                   GeneratedGlobalKind globalKind,
                                   RankedTensorType tensorType,
                                   unsigned numTokens,
-                                  unsigned &l2GlobalIndex);
+                                  unsigned &l2GlobalIndex,
+                                  const struct L2SourceInfo *sourceInfo = nullptr);
 LogicalResult allocateSliceInTileL1(MagiaHeaderModel &model,
                                     unsigned sliceIndex);
 

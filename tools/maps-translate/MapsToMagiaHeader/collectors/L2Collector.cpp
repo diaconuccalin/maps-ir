@@ -3,8 +3,49 @@
 #include "SliceCollector.h"
 
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 
 namespace mlir::maps {
+
+static void collectPackedInitializerMetadata(Value value, L2SourceInfo &info) {
+  auto blockArg = dyn_cast<BlockArgument>(value);
+  if (!blockArg)
+    return;
+  auto function = dyn_cast_or_null<func::FuncOp>(
+      blockArg.getOwner()->getParentOp());
+  if (!function)
+    return;
+
+  unsigned argNumber = blockArg.getArgNumber();
+  if (auto name = function.getArgAttrOfType<StringAttr>(argNumber,
+                                                        "maps.global_name"))
+    info.globalName = name.getValue().str();
+
+  auto metadata = function.getArgAttrOfType<DictionaryAttr>(
+      argNumber, "maps.initializer");
+  if (!metadata)
+    return;
+
+  auto offset = metadata.getAs<IntegerAttr>("offset");
+  auto byteSize = metadata.getAs<IntegerAttr>("byte_size");
+  auto dtype = metadata.getAs<StringAttr>("dtype");
+  auto shape = metadata.getAs<ArrayAttr>("shape");
+  if (!offset || !byteSize || !dtype || !shape)
+    return;
+
+  info.isConstant = true;
+  info.packedImageOffset = offset.getInt();
+  info.packedByteSize = byteSize.getInt();
+  info.packedDtype = dtype.getValue().str();
+  for (Attribute value : shape) {
+    auto dimension = dyn_cast<IntegerAttr>(value);
+    if (!dimension) {
+      info.isConstant = false;
+      return;
+    }
+    info.packedShape.push_back(dimension.getInt());
+  }
+}
 
 
 void collectL2Sources(Operation *regionOp, llvm::StringMap<L2SourceInfo> &sources) {
@@ -45,6 +86,7 @@ A send operation in the init region that starts from src = -1. This is the encod
     info.globalName = getGlobalNameForValue(globalValue);
     info.globalType = dyn_cast<RankedTensorType>(globalValue.getType());
     info.fullOffset = getDenseI64Array(definingOp, "static_offsets");
+    collectPackedInitializerMetadata(globalValue, info);
     
     /* debug
     llvm::errs() << "name: " << info.globalName << "\n";
@@ -80,7 +122,7 @@ LogicalResult addL2ReadForSlice(MagiaHeaderModel &model, unsigned sliceIndex,
 
   if (failed(getOrCreateL2Global(model, source.globalName, globalKind,
                                  source.globalType, numTokens,
-                                 l2GlobalIndex)))
+                                 l2GlobalIndex, &source)))
     return failure();
   
   // create the subslice associated with the transition

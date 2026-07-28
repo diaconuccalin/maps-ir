@@ -107,11 +107,12 @@ SmallVector<int64_t> getPairwiseLengths(ArrayRef<int64_t> values) {
   return lengths;
 }
 
-std::string getProducedValueKey(Value value) {
-  std::string storage;
-  llvm::raw_string_ostream os(storage);
-  value.printAsOperand(os, OpPrintingFlags());
-  return storage;
+std::string getProducedValueKey(RunCollectionState &state, Value value) {
+  auto [entry, inserted] =
+      state.producedValueIds.try_emplace(value, state.nextProducedValueId);
+  if (inserted)
+    ++state.nextProducedValueId;
+  return (Twine("value") + Twine(entry->second)).str();
 }
 
 } // namespace mlir::maps

@@ -16,6 +16,7 @@ static void emitGeneratedPrelude(const MagiaHeaderModel &model,
   os << "#include \"tile.h\"\n";
   os << "#include \"utils/maps_utils_v2.h\"\n\n";
   os << "#include \"add.h\"\n";
+  os << "#include \"conv2d.h\"\n";
   os << "#include \"log.h\"\n";
   os << "#include \"redmule_kernels.h\"\n\n";
   os << "#define MAPS_GENERATED_NUM_TOKENS "
@@ -31,7 +32,11 @@ static void emitGeneratedPrelude(const MagiaHeaderModel &model,
   os << "#ifndef MAPS_NUM_TOKENS\n";
   os << "#define MAPS_NUM_TOKENS MAPS_GENERATED_NUM_TOKENS\n";
   os << "#endif\n\n";
-  os << "#ifndef MAPS_NUM_TOKEN_SLOTS\n";
+  os << "#ifdef MAPS_NUM_TOKEN_SLOTS\n";
+  os << "#if MAPS_NUM_TOKEN_SLOTS != MAPS_GENERATED_NUM_TOKEN_SLOTS\n";
+  os << "#error \"MAPS_NUM_TOKEN_SLOTS disagrees with the planned execution contract\"\n";
+  os << "#endif\n";
+  os << "#else\n";
   os << "#define MAPS_NUM_TOKEN_SLOTS MAPS_GENERATED_NUM_TOKEN_SLOTS\n";
   os << "#endif\n\n";
   os << "typedef struct {\n";
@@ -44,20 +49,59 @@ static std::string getL2GlobalSymbol(const GeneratedL2Global &global) {
   return (Twine("maps_generated_l2_global_") + Twine(global.modelIndex)).str();
 }
 
+static std::string getWeightsSymbol(const MagiaHeaderModel &model,
+                                    StringRef suffix) {
+  return (Twine(model.outputStem) + "_weights_" + suffix).str();
+}
+
+static void emitL2GlobalAddress(const MagiaHeaderModel &model,
+                                const GeneratedL2Global &global,
+                                uint64_t offset, llvm::raw_ostream &os) {
+  if (global.isConstant) {
+    os << getWeightsSymbol(model, "start");
+    uint64_t packedOffset = global.packedImageOffset + offset;
+    if (packedOffset != 0)
+      os << " + " << packedOffset << "u";
+    return;
+  }
+  os << getL2GlobalSymbol(global);
+  if (offset != 0)
+    os << " + " << offset << "u";
+}
+
 static uint64_t getL2GlobalAllocationBytes(const GeneratedL2Global &global) {
   return global.tokenStrideBytes * global.numTokens;
 }
 
 static void emitL2GlobalDeclarations(const MagiaHeaderModel &model,
                                      llvm::raw_ostream &os) {
+  if (model.hasPackedWeights) {
+    os << "extern const uint8_t " << getWeightsSymbol(model, "start")
+       << "[];\n";
+    os << "extern const uint8_t " << getWeightsSymbol(model, "end")
+       << "[];\n";
+    os << "extern const uint8_t " << getWeightsSymbol(model, "size")
+       << "[];\n";
+  }
   for (const GeneratedL2Global &global : model.l2Globals) {
+    if (global.isConstant)
+      continue;
     os << "extern uint8_t " << getL2GlobalSymbol(global) << "["
        << getL2GlobalAllocationBytes(global) << "];\n";
   }
   os << "void maps_generated_init_l2_data(uint32_t seed);\n\n";
   os << "static inline void maps_generated_init_tensors(uint32_t hartid) {\n";
-  os << "  if (hartid == 0u)\n";
+  os << "  if (hartid == 0u) {\n";
+  if (model.hasPackedWeights) {
+    os << "    if ((((uintptr_t)" << getWeightsSymbol(model, "start")
+       << ") & " << (model.weightsAlignment - 1) << "u) != 0u ||\n";
+    os << "        (uintptr_t)" << getWeightsSymbol(model, "end")
+       << " - (uintptr_t)" << getWeightsSymbol(model, "start") << " != "
+       << model.weightsSize << "u)\n";
+    os << "      maps_trap();\n";
+  }
   os << "    maps_generated_init_l2_data(0x1234u);\n";
+  os << "  }\n";
   os << "}\n\n";
 }
 
@@ -91,24 +135,63 @@ static StringRef getOpKindName(GeneratedOpKind kind) {
   switch (kind) {
   case GeneratedOpKind::Matmul:
     return "OP_MATMUL";
+  case GeneratedOpKind::Conv2D:
+    return "OP_CONV2D";
+  case GeneratedOpKind::DepthwiseConv:
+    return "OP_DEPTHWISE_CONV";
+  case GeneratedOpKind::Abs:
+    return "OP_ABS";
   case GeneratedOpKind::Add:
     return "OP_ADD";
+  case GeneratedOpKind::Div:
+    return "OP_DIV";
   case GeneratedOpKind::Log:
     return "OP_LOG";
   case GeneratedOpKind::Exp:
     return "OP_EXP";
+  case GeneratedOpKind::GroupNormalize:
+    return "OP_GROUP_NORMALIZE";
+  case GeneratedOpKind::GroupReduce:
+    return "OP_GROUP_REDUCE";
+  case GeneratedOpKind::Mul:
+    return "OP_MUL";
+  case GeneratedOpKind::Neg:
+    return "OP_NEG";
+  case GeneratedOpKind::Pow:
+    return "OP_POW";
+  case GeneratedOpKind::ReduceMax:
+    return "OP_REDUCE_MAX";
+  case GeneratedOpKind::ReduceSum:
+    return "OP_REDUCE_SUM";
+  case GeneratedOpKind::Relu:
+    return "OP_RELU";
+  case GeneratedOpKind::Reshape:
+    return "OP_RESHAPE";
+  case GeneratedOpKind::Sigmoid:
+    return "OP_SIGMOID";
+  case GeneratedOpKind::Slice:
+    return "OP_SLICE";
+  case GeneratedOpKind::Sqrt:
+    return "OP_SQRT";
+  case GeneratedOpKind::Sub:
+    return "OP_SUB";
+  case GeneratedOpKind::Transpose:
+    return "OP_TRANSPOSE";
+  case GeneratedOpKind::AllReduceMax:
+    return "OP_ALL_REDUCE_MAX";
+  case GeneratedOpKind::AllReduceSum:
+    return "OP_ALL_REDUCE_SUM";
   case GeneratedOpKind::Copy:
     return "OP_COPY";
   }
   llvm_unreachable("unknown op kind");
 }
 
-// MAGIA descriptors currently reserve four dimensions.  These helpers keep the
-// padding policy explicit at every array emission site.
+// Keep descriptor array padding consistent with the MAPS tensor-rank limit.
 static void emitPaddedI64Array(ArrayRef<int64_t> values,
                                llvm::raw_ostream &os) {
   os << "{";
-  for (unsigned i = 0; i < 4; ++i) {
+  for (unsigned i = 0; i < kGeneratedDescriptorMaxDims; ++i) {
     if (i != 0)
       os << ", ";
     os << (i < values.size() ? values[i] : 0);
@@ -119,7 +202,7 @@ static void emitPaddedI64Array(ArrayRef<int64_t> values,
 static void emitPaddedU64Array(ArrayRef<uint64_t> values,
                                llvm::raw_ostream &os) {
   os << "{";
-  for (unsigned i = 0; i < 4; ++i) {
+  for (unsigned i = 0; i < kGeneratedDescriptorMaxDims; ++i) {
     if (i != 0)
       os << ", ";
     os << (i < values.size() ? values[i] : 0);
@@ -199,10 +282,9 @@ static void emitL2ReadDesc(const MagiaHeaderModel &model,
   os << "  {\n";
   os << "    .global_id = " << global.globalId << ",\n";
   os << "    .global_kind = " << getGlobalKindName(global.globalKind) << ",\n";
-  os << "    .src_l2_addr = (uint32_t)" << getL2GlobalSymbol(global);
+  os << "    .src_l2_addr = (uint32_t)";
   uint64_t srcOffset = read.srcL2Address - global.l2Address;
-  if (srcOffset != 0)
-    os << " + " << srcOffset << "u";
+  emitL2GlobalAddress(model, global, srcOffset, os);
   os << ",\n";
   os << "    .src_l2_token_stride_bytes = "
      << read.srcL2TokenStrideBytes << ",\n";
@@ -504,6 +586,25 @@ static void emitExecuteOp(llvm::raw_ostream &os) {
   os << "                        MAPS_WAIT_MODE);\n";
   os << "    return 0;\n";
   os << "  }\n\n";
+  os << "  if (op->kind == OP_CONV2D) {\n";
+  os << "    uint32_t input = local_subslice_addr(plan, &op->inputs[0], slot);\n";
+  os << "    uint32_t weight = local_subslice_addr(plan, &op->inputs[1], slot);\n";
+  os << "    uint32_t bias = op->num_inputs == 3u\n";
+  os << "        ? local_subslice_addr(plan, &op->inputs[2], slot) : 0u;\n";
+  os << "    uint32_t output = local_subslice_addr(plan, &op->outputs[0], slot);\n\n";
+  os << "    maps_conv2d_nchw_f16(\n";
+  os << "        (float16 *)output, (const float16 *)input,\n";
+  os << "        (const float16 *)weight,\n";
+  os << "        bias != 0u ? (const float16 *)bias : 0,\n";
+  os << "        op->inputs[0].shape[0], op->inputs[0].shape[1],\n";
+  os << "        op->inputs[0].shape[2], op->inputs[0].shape[3],\n";
+  os << "        op->outputs[0].shape[1], op->outputs[0].shape[2],\n";
+  os << "        op->outputs[0].shape[3], op->inputs[1].shape[2],\n";
+  os << "        op->inputs[1].shape[3], op->params[0], op->params[1],\n";
+  os << "        op->params[2], op->params[3], op->params[4],\n";
+  os << "        op->params[5], op->params[6], op->params[7]);\n";
+  os << "    return 0;\n";
+  os << "  }\n\n";
   os << "  if (op->kind == OP_LOG) {\n";
   os << "    uint32_t in = local_subslice_addr(plan, &op->inputs[0], slot);\n";
   os << "    uint32_t out = local_subslice_addr(plan, &op->outputs[0], slot);\n\n";
@@ -689,45 +790,57 @@ void emitDataFile(const MagiaHeaderModel &model, llvm::raw_ostream &os) {
   os << "#include <stddef.h>\n\n";
 
   for (const GeneratedL2Global &global : model.l2Globals) {
+    if (global.isConstant)
+      continue;
     os << "uint8_t " << getL2GlobalSymbol(global) << "["
        << getL2GlobalAllocationBytes(global)
        << "] __attribute__((aligned(16)));\n";
   }
 
-  os << "\nstatic uint32_t maps_generated_lcg(uint32_t *state) {\n";
-  os << "  *state = *state * 1664525u + 1013904223u;\n";
-  os << "  return *state;\n";
-  os << "}\n\n";
+  if (model.randomizeInputs) {
+    os << "\nstatic uint32_t maps_generated_lcg(uint32_t *state) {\n";
+    os << "  *state = *state * 1664525u + 1013904223u;\n";
+    os << "  return *state;\n";
+    os << "}\n\n";
+  }
 
   os << "static void maps_generated_zero_bytes(uint8_t *dst, size_t bytes) {\n";
   os << "  for (size_t i = 0; i < bytes; ++i)\n";
   os << "    dst[i] = 0u;\n";
   os << "}\n\n";
 
-  os << "static void maps_generated_fill_f16(uint8_t *dst, size_t bytes,\n";
-  os << "                                    uint32_t *state) {\n";
-  os << "  static const uint16_t values[] = {\n";
-  os << "      0x3c00u, 0x4000u, 0x4200u, 0x4400u,\n";
-  os << "      0x4500u, 0x4600u, 0x4700u, 0x4800u,\n";
-  os << "  };\n";
-  os << "  uint16_t *half = (uint16_t *)dst;\n";
-  os << "  size_t elems = bytes / sizeof(uint16_t);\n";
-  os << "  for (size_t i = 0; i < elems; ++i)\n";
-  os << "    half[i] = values[(maps_generated_lcg(state) >> 24) & 7u];\n";
-  os << "}\n\n";
+  if (model.randomizeInputs) {
+    os << "static void maps_generated_fill_f16(uint8_t *dst, size_t bytes,\n";
+    os << "                                    uint32_t *state) {\n";
+    os << "  static const uint16_t values[] = {\n";
+    os << "      0x3c00u, 0x4000u, 0x4200u, 0x4400u,\n";
+    os << "      0x4500u, 0x4600u, 0x4700u, 0x4800u,\n";
+    os << "  };\n";
+    os << "  uint16_t *half = (uint16_t *)dst;\n";
+    os << "  size_t elems = bytes / sizeof(uint16_t);\n";
+    os << "  for (size_t i = 0; i < elems; ++i)\n";
+    os << "    half[i] = values[(maps_generated_lcg(state) >> 24) & 7u];\n";
+    os << "}\n\n";
 
-  os << "static void maps_generated_fill_bytes(uint8_t *dst, size_t bytes,\n";
-  os << "                                      uint32_t *state) {\n";
-  os << "  for (size_t i = 0; i < bytes; ++i)\n";
-  os << "    dst[i] = (uint8_t)(maps_generated_lcg(state) >> 24);\n";
-  os << "}\n\n";
+    os << "static void maps_generated_fill_bytes(uint8_t *dst, size_t bytes,\n";
+    os << "                                      uint32_t *state) {\n";
+    os << "  for (size_t i = 0; i < bytes; ++i)\n";
+    os << "    dst[i] = (uint8_t)(maps_generated_lcg(state) >> 24);\n";
+    os << "}\n\n";
+  }
 
   os << "void maps_generated_init_l2_data(uint32_t seed) {\n";
-  os << "  uint32_t state = seed;\n";
+  if (model.randomizeInputs)
+    os << "  uint32_t state = seed;\n";
+  else
+    os << "  (void)seed;\n";
   for (const GeneratedL2Global &global : model.l2Globals) {
+    if (global.isConstant)
+      continue;
     os << "\n";
-    if (global.globalKind == GeneratedGlobalKind::Input ||
-        global.globalKind == GeneratedGlobalKind::Initializer) {
+    if (model.randomizeInputs &&
+        (global.globalKind == GeneratedGlobalKind::Input ||
+         global.globalKind == GeneratedGlobalKind::Initializer)) {
       if (global.elemBytes == 2) {
         os << "  maps_generated_fill_f16(" << getL2GlobalSymbol(global)
            << ", sizeof(" << getL2GlobalSymbol(global) << "), &state);\n";
@@ -741,6 +854,25 @@ void emitDataFile(const MagiaHeaderModel &model, llvm::raw_ostream &os) {
     }
   }
   os << "}\n";
+}
+
+void emitWeightsAssembly(const MagiaHeaderModel &model,
+                         llvm::raw_ostream &os) {
+  if (!model.hasPackedWeights)
+    return;
+
+  std::string start = getWeightsSymbol(model, "start");
+  std::string end = getWeightsSymbol(model, "end");
+  std::string size = getWeightsSymbol(model, "size");
+  os << ".section .maps_weights,\"a\",@progbits\n";
+  os << ".balign " << model.weightsAlignment << "\n";
+  os << ".global " << start << "\n";
+  os << ".global " << end << "\n";
+  os << ".global " << size << "\n";
+  os << start << ":\n";
+  os << ".incbin \"" << model.weightsFile << "\"\n";
+  os << end << ":\n";
+  os << ".set " << size << ", " << end << " - " << start << "\n";
 }
 
 } // namespace mlir::maps

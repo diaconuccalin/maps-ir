@@ -1,4 +1,5 @@
 #include "Model.h"
+#include "collectors/CollectorSupport.h"
 
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Support/LogicalResult.h"
@@ -202,7 +203,8 @@ LogicalResult getOrCreateL2Global(MagiaHeaderModel &model,
                                   GeneratedGlobalKind globalKind,
                                   RankedTensorType tensorType,
                                   unsigned numTokens,
-                                  unsigned &l2GlobalIndex) {
+                                  unsigned &l2GlobalIndex,
+                                  const L2SourceInfo *sourceInfo) {
 
   /*
   check if an L2 allocation exists for the current global tensor. If not, create it
@@ -236,13 +238,41 @@ LogicalResult getOrCreateL2Global(MagiaHeaderModel &model,
   global.numTokens = numTokens;
   global.stridesBytes = computeContiguousStridesBytes(global.shape, global.elemBytes);
 
+  if (globalKind == GeneratedGlobalKind::Initializer && sourceInfo &&
+      sourceInfo->isConstant) {
+    global.isConstant = true;
+    global.packedImageOffset = sourceInfo->packedImageOffset;
+    global.packedByteSize = sourceInfo->packedByteSize;
+    global.packedDtype = sourceInfo->packedDtype;
+    global.packedShape = sourceInfo->packedShape;
+    global.requiredAlignment = model.weightsAlignment;
+
+    if (!model.hasPackedWeights ||
+        global.packedImageOffset % global.requiredAlignment != 0 ||
+        global.packedImageOffset + global.packedByteSize > model.weightsSize ||
+        global.packedShape != global.shape ||
+        global.packedByteSize != global.tensorBytes)
+      return failure();
+
+    global.l2Address = model.l2Base + global.packedImageOffset;
+    model.l2GlobalIndices[key] = global.modelIndex;
+    model.l2Globals.push_back(std::move(global));
+    l2GlobalIndex = model.l2Globals.back().modelIndex;
+    return success();
+  }
+
+  if (globalKind == GeneratedGlobalKind::Initializer &&
+      (model.hasPackedWeights || !model.randomizeInputs))
+    return failure();
+
   // allign
-  model.nextL2Address = (model.nextL2Address, kGeneratedL2AlignmentBytes);
+  model.nextL2Address = alignTo(model.nextL2Address,
+                                kGeneratedL2AlignmentBytes);
   global.l2Address = model.nextL2Address;
 
   // Return error if memory is exceeded
   uint64_t allocationBytes = global.tokenStrideBytes * global.numTokens;
-  if (global.l2Address + allocationBytes > kMagiaL2End)
+  if (global.l2Address + allocationBytes > model.l2End)
     return failure();
 
   // set starting adress for next allocation

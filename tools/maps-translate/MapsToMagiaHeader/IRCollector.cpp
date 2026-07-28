@@ -8,8 +8,89 @@
 
 #include "mlir/IR/Operation.h"
 
+#include <algorithm>
+#include <limits>
+
 
 namespace mlir::maps {
+
+static LogicalResult collectExecutionContract(ModuleOp module,
+                                              MagiaHeaderModel &model) {
+  auto numTokenSlots =
+      module->getAttrOfType<IntegerAttr>("maps.num_token_slots");
+  if (!numTokenSlots || numTokenSlots.getInt() <= 0 ||
+      static_cast<uint64_t>(numTokenSlots.getInt()) >
+          std::numeric_limits<unsigned>::max())
+    return failure();
+  model.numTokenSlots = static_cast<unsigned>(numTokenSlots.getInt());
+  return success();
+}
+
+static LogicalResult collectDeploymentIdentity(ModuleOp module,
+                                               MagiaHeaderModel &model) {
+  if (auto name = module->getAttrOfType<StringAttr>("maps.name"))
+    model.sourceModelName = name.getValue().str();
+
+  auto meshWidth = module->getAttrOfType<IntegerAttr>("maps.mesh_width");
+  auto meshHeight = module->getAttrOfType<IntegerAttr>("maps.mesh_height");
+  if (meshWidth && meshHeight && meshWidth.getInt() > 0 &&
+      meshHeight.getInt() > 0 &&
+      static_cast<uint64_t>(meshWidth.getInt()) <=
+          std::numeric_limits<unsigned>::max() &&
+      static_cast<uint64_t>(meshHeight.getInt()) <=
+          std::numeric_limits<unsigned>::max()) {
+    model.meshWidth = static_cast<unsigned>(meshWidth.getInt());
+    model.meshHeight = static_cast<unsigned>(meshHeight.getInt());
+  } else if (meshWidth || meshHeight) {
+    return failure();
+  }
+  return success();
+}
+
+static LogicalResult collectBundleMetadata(ModuleOp module,
+                                           MagiaHeaderModel &model) {
+  auto bundle = module->getAttrOfType<DictionaryAttr>("maps.bundle");
+  if (!bundle)
+    return success();
+
+  auto schemaVersion = bundle.getAs<IntegerAttr>("schema_version");
+  auto weightsFile = bundle.getAs<StringAttr>("weights_file");
+  auto weightsSize = bundle.getAs<IntegerAttr>("weights_size");
+  auto weightsSha256 = bundle.getAs<StringAttr>("weights_sha256");
+  auto alignment = bundle.getAs<IntegerAttr>("alignment");
+  auto endianness = bundle.getAs<StringAttr>("endianness");
+  if (!schemaVersion || schemaVersion.getInt() != 1 || !weightsFile ||
+      !weightsSize || weightsSize.getInt() < 0 || !weightsSha256 ||
+      !alignment || alignment.getInt() <= 0 ||
+      (alignment.getInt() & (alignment.getInt() - 1)) != 0 ||
+      !endianness || endianness.getValue() != "little")
+    return failure();
+  if (weightsFile.getValue().contains('"') ||
+      weightsFile.getValue().contains('\n') ||
+      weightsSha256.getValue().size() != 64)
+    return failure();
+
+  model.hasPackedWeights = true;
+  model.weightsFile = weightsFile.getValue().str();
+  model.weightsSize = weightsSize.getInt();
+  model.weightsSha256 = weightsSha256.getValue().str();
+  model.weightsAlignment = alignment.getInt();
+  if (model.l2Base % model.weightsAlignment != 0)
+    return failure();
+
+  if (auto capacity = module->getAttrOfType<IntegerAttr>(
+          "maps.l2_capacity_bytes")) {
+    if (capacity.getInt() <= 0)
+      return failure();
+    uint64_t configuredEnd = model.l2Base + capacity.getInt();
+    model.l2End = std::min(model.l2End, configuredEnd);
+  }
+  if (model.weightsSize > model.l2End - model.l2Base)
+    return failure();
+  model.nextL2Address = alignTo(model.l2Base + model.weightsSize,
+                                kGeneratedL2AlignmentBytes);
+  return success();
+}
 
 
 static LogicalResult collectInitRegion(Operation *initOp, MagiaHeaderModel &model) {
@@ -90,7 +171,8 @@ static LogicalResult collectRunRegion(Operation *runOp, MagiaHeaderModel &model)
     intra-stage copies like softmax
     */
 
-    if (name == "linalg.matmul" || name == "linalg.generic") {
+    if (name == "linalg.matmul" || name == "linalg.generic" ||
+        name == "maps.conv2d" || name == "maps.kernel") {
       if (failed(collectComputeOp(op, state, model)))
         return WalkResult::interrupt();
       return WalkResult::advance();
@@ -114,6 +196,10 @@ static LogicalResult collectRunRegion(Operation *runOp, MagiaHeaderModel &model)
 
 // Top level collector function
 LogicalResult collectMagiaHeaderModel(ModuleOp module, MagiaHeaderModel &model) {
+  if (failed(collectDeploymentIdentity(module, model)) ||
+      failed(collectExecutionContract(module, model)) ||
+      failed(collectBundleMetadata(module, model)))
+    return failure();
                                         
   WalkResult result = module.walk([&](Operation *op) -> WalkResult {
     StringRef name = op->getName().getStringRef();

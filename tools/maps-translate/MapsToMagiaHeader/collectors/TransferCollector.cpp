@@ -214,7 +214,7 @@ LogicalResult collectProducedSend(Operation *sendOp, RunCollectionState &state,
   std::string globalName = getChannelBaseName(channel);
   std::string uniqueKey =
       (Twine(static_cast<int>(kind)) + ":" + Twine(srcHartid.getInt()) + ":" +
-       globalName + ":" + getProducedValueKey(source->rootValue))
+       globalName + ":" + getProducedValueKey(state, source->rootValue))
           .str();
   unsigned srcSliceIndex = 0;
   SmallVector<int64_t> outputFullOffset = source->fullOffset;

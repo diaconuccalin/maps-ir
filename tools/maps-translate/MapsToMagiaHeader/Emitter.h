@@ -12,6 +12,7 @@ namespace mlir::maps {
 // Emits the currently debug-oriented MAGIA SDK header from the collected model.
 void emitDebugHeader(const MagiaHeaderModel &model, llvm::raw_ostream &os);
 void emitDataFile(const MagiaHeaderModel &model, llvm::raw_ostream &os);
+void emitWeightsAssembly(const MagiaHeaderModel &model, llvm::raw_ostream &os);
 
 } // namespace mlir::maps
 
