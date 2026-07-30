@@ -49,6 +49,10 @@ struct Fragment {
     int64_t dstHartId;
     SmallVector<SliceDim> srcDims;
     SmallVector<SliceDim> dstDims;
+    int64_t transitionId = -1;
+    int64_t destinationStageId = -1;
+    int64_t destinationLayerIndex = -1;
+    int64_t destinationInputIndex = -1;
 };
 
 struct TransitionFragment {
@@ -61,6 +65,9 @@ struct TransitionFragment {
     SmallVector<SliceDim> srcParentDims;
     SmallVector<SliceDim> dstParentDims;
     bool hasRelativeSubSlices;
+    int64_t transitionId = -1;
+    int64_t sourceStageId = -1;
+    int64_t destinationStageId = -1;
 };
 
 using TransitionFragmentVector = SmallVector<TransitionFragment, 0>;
@@ -1048,6 +1055,63 @@ static std::optional<SmallVector<Fragment>> getInitFragments(const llvm::json::A
     return result;
 }
 
+static std::optional<SmallVector<Fragment>>
+getExecutionPlanInitializerFragments(const llvm::json::Array &stages) {
+    SmallVector<Fragment> result;
+
+    for (auto stageEntry : llvm::enumerate(stages)) {
+        auto *stage = stageEntry.value().getAsObject();
+        auto *layers = stage->getArray("layers");
+
+        for (auto layerEntry : llvm::enumerate(*layers)) {
+            auto *layer = layerEntry.value().getAsObject();
+            auto *inputs = layer->getArray("inputs");
+
+            for (auto inputEntry : llvm::enumerate(*inputs)) {
+                auto *input = inputEntry.value().getAsObject();
+                auto tensorId = input->getInteger("tensor_id");
+                auto *source = input->getObject("source");
+                if (source->getString("kind") != "INITIALIZER")
+                    continue;
+
+                auto *destinations = source->getArray("destinations");
+                for (auto destinationEntry : llvm::enumerate(*destinations)) {
+                    auto *destination =
+                        destinationEntry.value().getAsObject();
+                    auto tileId = destination->getInteger("tile_id");
+                    auto *tensorSlice =
+                        destination->getObject("tensor_slice");
+                    auto dims = parseSliceDims(*tensorSlice);
+                    if (!tileId || !dims)
+                        return std::nullopt;
+
+                    std::string name =
+                        "initializer_stage_" +
+                        std::to_string(stageEntry.index()) + "_layer_" +
+                        std::to_string(layerEntry.index()) + "_input_" +
+                        std::to_string(inputEntry.index()) + "_destination_" +
+                        std::to_string(destinationEntry.index());
+                    result.push_back(Fragment{
+                        name,
+                        name + "_slot",
+                        *tensorId,
+                        -1,
+                        *tileId,
+                        *dims,
+                        *dims,
+                        -1,
+                        static_cast<int64_t>(stageEntry.index()),
+                        static_cast<int64_t>(layerEntry.index()),
+                        static_cast<int64_t>(inputEntry.index()),
+                    });
+                }
+            }
+        }
+    }
+
+    return result;
+}
+
 
 static std::optional<TransitionFragmentVector> getTransitionFragments(const llvm::json::Array &transitions) {
     TransitionFragmentVector result;
@@ -1122,6 +1186,145 @@ static std::optional<TransitionFragmentVector> getTransitionFragments(const llvm
             });
         }
     }
+    return result;
+}
+
+struct ExecutionPlanTransitionFragments {
+    SmallVector<Fragment> inputs;
+    TransitionFragmentVector intermediates;
+    TransitionFragmentVector outputs;
+};
+
+static std::optional<ExecutionPlanTransitionFragments>
+getExecutionPlanTransitionFragments(const llvm::json::Array &transitions) {
+    ExecutionPlanTransitionFragments result;
+
+    for (auto transitionEntry : llvm::enumerate(transitions)) {
+        auto *transition = transitionEntry.value().getAsObject();
+        auto kind = transition->getString("kind");
+        auto tensorId = transition->getInteger("tensor_id");
+        if (!kind || !tensorId)
+            return std::nullopt;
+
+        std::string transitionName =
+            "transition_" + std::to_string(transitionEntry.index());
+        if (*kind == "INPUT") {
+            auto destinationStageId =
+                transition->getInteger("destination_stage_id");
+            auto *destinations = transition->getArray("destinations");
+            if (!destinationStageId || !destinations)
+                return std::nullopt;
+            for (auto destinationEntry : llvm::enumerate(*destinations)) {
+                auto *destination = destinationEntry.value().getAsObject();
+                auto tileId = destination->getInteger("tile_id");
+                auto *tensorSlice =
+                    destination->getObject("tensor_slice");
+                auto dims = tensorSlice
+                    ? parseSliceDims(*tensorSlice)
+                    : std::nullopt;
+                if (!tileId || !dims)
+                    return std::nullopt;
+
+                result.inputs.push_back(Fragment{
+                    transitionName + "_destination_" +
+                        std::to_string(destinationEntry.index()),
+                    "",
+                    *tensorId,
+                    -1,
+                    *tileId,
+                    *dims,
+                    *dims,
+                    static_cast<int64_t>(transitionEntry.index()),
+                    *destinationStageId,
+                });
+            }
+            continue;
+        }
+
+        if (*kind == "INTERMEDIATE") {
+            auto sourceStageId =
+                transition->getInteger("source_stage_id");
+            auto destinationStageId =
+                transition->getInteger("destination_stage_id");
+            auto *transfers = transition->getArray("transfers");
+            if (!sourceStageId || !destinationStageId || !transfers)
+                return std::nullopt;
+            for (auto transferEntry : llvm::enumerate(*transfers)) {
+                auto *transfer = transferEntry.value().getAsObject();
+                auto sourceTileId =
+                    transfer->getInteger("source_tile_id");
+                auto destinationTileId =
+                    transfer->getInteger("destination_tile_id");
+                auto *sourceSubSlice =
+                    transfer->getObject("source_subslice");
+                auto *destinationSubSlice =
+                    transfer->getObject("destination_subslice");
+                auto parsedSource = sourceSubSlice
+                    ? parseTensorSubSlice(*sourceSubSlice)
+                    : std::nullopt;
+                auto parsedDestination = destinationSubSlice
+                    ? parseTensorSubSlice(*destinationSubSlice)
+                    : std::nullopt;
+                if (!sourceTileId || !destinationTileId ||
+                    !parsedSource || !parsedDestination)
+                    return std::nullopt;
+
+                result.intermediates.push_back(TransitionFragment{
+                    transitionName + "_transfer_" +
+                        std::to_string(transferEntry.index()),
+                    *tensorId,
+                    *sourceTileId,
+                    *destinationTileId,
+                    parsedSource->second,
+                    parsedDestination->second,
+                    parsedSource->first,
+                    parsedDestination->first,
+                    true,
+                    static_cast<int64_t>(transitionEntry.index()),
+                    *sourceStageId,
+                    *destinationStageId,
+                });
+            }
+            continue;
+        }
+
+        if (*kind == "OUTPUT") {
+            auto sourceStageId =
+                transition->getInteger("source_stage_id");
+            auto *sources = transition->getArray("sources");
+            if (!sourceStageId || !sources)
+                return std::nullopt;
+            for (auto sourceEntry : llvm::enumerate(*sources)) {
+                auto *source = sourceEntry.value().getAsObject();
+                auto tileId = source->getInteger("tile_id");
+                auto *tensorSlice = source->getObject("tensor_slice");
+                auto dims = tensorSlice
+                    ? parseSliceDims(*tensorSlice)
+                    : std::nullopt;
+                if (!tileId || !dims)
+                    return std::nullopt;
+
+                result.outputs.push_back(TransitionFragment{
+                    transitionName + "_source_" +
+                        std::to_string(sourceEntry.index()),
+                    *tensorId,
+                    *tileId,
+                    -1,
+                    *dims,
+                    *dims,
+                    *dims,
+                    *dims,
+                    false,
+                    static_cast<int64_t>(transitionEntry.index()),
+                    *sourceStageId,
+                });
+            }
+            continue;
+        }
+
+        return std::nullopt;
+    }
+
     return result;
 }
 
@@ -1263,9 +1466,19 @@ static std::optional<SmallVector<Stage>>getStageObjs(const llvm::json::Array &st
 }
 
 
-static std::optional<llvm::SetVector<int64_t>> collectInputTensorIds(const llvm::json::Array &stages){
+static std::optional<llvm::SetVector<int64_t>>
+collectInputTensorIds(const llvm::json::Array &stages,
+                      const llvm::json::Array *transitions = nullptr) {
 
     llvm::SetVector<int64_t> ids;
+
+    if (transitions) {
+        for (const llvm::json::Value &transitionValue : *transitions) {
+            auto *transition = transitionValue.getAsObject();
+            if (transition->getString("kind") == "INPUT")
+                ids.insert(*transition->getInteger("tensor_id"));
+        }
+    }
 
     for (const llvm::json::Value &stageValue : stages) {
         auto *stage = stageValue.getAsObject();
@@ -1281,8 +1494,9 @@ static std::optional<llvm::SetVector<int64_t>> collectInputTensorIds(const llvm:
             std::optional<int64_t> tensorId = input->getInteger("tensor_id");
             auto *source = input->getObject("source");
 
-            if (source->getInteger("base_addr")) // gonna change this in maps later
-            ids.insert(*tensorId);
+            if (source->getInteger("base_addr") ||
+                source->getString("kind") == "INITIALIZER")
+                ids.insert(*tensorId);
             }
         }
     }
@@ -1309,10 +1523,15 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
     auto *root = json->getAsObject();
     auto *tensors = root->getArray("tensors");
     auto *stages = root->getArray("stages");
+    auto *transitions = root->getArray("transitions");
+    bool usesExecutionPlanTransitions =
+        !root->getArray("initializations") &&
+        !root->getArray("finalizations");
 
     std::optional<StringRef> netName = root->getString("name");
 
-    auto inputTensorIds = *collectInputTensorIds(*stages);
+    auto inputTensorIds = *collectInputTensorIds(
+        *stages, usesExecutionPlanTransitions ? transitions : nullptr);
 
     OpBuilder builder(ctx);
     Location loc = builder.getUnknownLoc();
@@ -1408,13 +1627,31 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
     init.getBody().emplaceBlock();
     builder.setInsertionPointToStart(&init.getBody().front());
 
-    // obtain initializer fragments from json
-    auto *initializations = root->getArray("initializations");
-    auto initFragments = getInitFragments(*initializations);
-    auto *transitions = root->getArray("transitions");
-    auto transitionFragments = getTransitionFragments(*transitions);
-    auto *finalizations = root->getArray("finalizations");
-    auto outputFragments = getFinalizationFragments(*finalizations);
+    // obtain boundary and intermediate movement from either supported schema
+    std::optional<SmallVector<Fragment>> initFragments;
+    std::optional<TransitionFragmentVector> transitionFragments;
+    std::optional<TransitionFragmentVector> outputFragments;
+    if (usesExecutionPlanTransitions) {
+        initFragments = getExecutionPlanInitializerFragments(*stages);
+        auto executionPlanFragments =
+            getExecutionPlanTransitionFragments(*transitions);
+        if (!initFragments || !executionPlanFragments)
+            return {};
+        initFragments->append(
+            executionPlanFragments->inputs.begin(),
+            executionPlanFragments->inputs.end());
+        transitionFragments =
+            std::move(executionPlanFragments->intermediates);
+        outputFragments = std::move(executionPlanFragments->outputs);
+    } else {
+        auto *initializations = root->getArray("initializations");
+        auto *finalizations = root->getArray("finalizations");
+        initFragments = getInitFragments(*initializations);
+        transitionFragments = getTransitionFragments(*transitions);
+        outputFragments = getFinalizationFragments(*finalizations);
+    }
+    if (!initFragments || !transitionFragments || !outputFragments)
+        return {};
 
     // map input tensor ids to main function arguments
     llvm::DenseMap<int64_t, Value> inputTensorValues;
@@ -1561,6 +1798,9 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
             auto *tensor = (*tensors)[fragment.tensorId].getAsObject();
             if (isInitializerTensor(*tensor))
                 continue;
+            if (fragment.destinationStageId >= 0 &&
+                fragment.destinationStageId != stageObj.stageId)
+                continue;
 
             bool isFragmentInStage = false;
             for (const Tile &tileObj : *tileObjs) {
@@ -1626,10 +1866,14 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
 
             llvm::DenseMap<int64_t, Value> tileValues;
             llvm::DenseMap<int64_t, SmallVector<std::pair<const TransitionFragment *, Value>>> transitionValues;
+            llvm::DenseMap<int64_t, Value> transitionInputValues;
 
             // receive transition fragments from producer tiles
             for (const TransitionFragment &fragment : *transitionFragments) {
                 if (fragment.dstHartId != tileObj.hartId)
+                    continue;
+                if (fragment.destinationStageId >= 0 &&
+                    fragment.destinationStageId != stageObj.stageId)
                     continue;
 
                 auto *tensor = (*tensors)[fragment.tensorId].getAsObject();
@@ -1650,13 +1894,24 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                 );
                 setTransitionSubSliceAttrs(recv.getOperation(), fragment, builder);
                 Value transitionInput = recv.getResult();
-                transitionValues[fragment.tensorId].push_back({&fragment, transitionInput});
+                int64_t bindingId = fragment.transitionId >= 0
+                    ? fragment.transitionId
+                    : fragment.tensorId;
+                transitionValues[bindingId].push_back(
+                    {&fragment, transitionInput});
             }
 
             for (auto &entry : transitionValues) {
                 SmallVector<std::pair<const TransitionFragment *, Value>> &values = entry.second;
                 if (values.size() == 1) {
-                    tileValues[entry.first] = values.front().second;
+                    const TransitionFragment &fragment =
+                        *values.front().first;
+                    if (fragment.transitionId >= 0)
+                        transitionInputValues[fragment.transitionId] =
+                            values.front().second;
+                    else
+                        tileValues[fragment.tensorId] =
+                            values.front().second;
                     continue;
                 }
 
@@ -1723,7 +1978,11 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                     ).getResult();
                 }
 
-                tileValues[entry.first] = assembled;
+                const TransitionFragment &fragment = fragments.front();
+                if (fragment.transitionId >= 0)
+                    transitionInputValues[fragment.transitionId] = assembled;
+                else
+                    tileValues[fragment.tensorId] = assembled;
                 continue;
             }
 
@@ -1731,9 +1990,14 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
             for (const Fragment &fragment : *initFragments) {
                 if (fragment.dstHartId != tileObj.hartId)
                     continue;
+                if (fragment.destinationStageId >= 0 &&
+                    fragment.destinationStageId != stageObj.stageId)
+                    continue;
 
                 auto *tensor = (*tensors)[fragment.tensorId].getAsObject();
                 if (isInitializerTensor(*tensor)) {
+                    if (fragment.destinationLayerIndex >= 0)
+                        continue;
                     // load init fragments
                     SmallVector<int64_t> shape;
                     for (const SliceDim &dim : fragment.srcDims)
@@ -1766,7 +2030,11 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                         fragment.srcHartId,
                         fragment.dstHartId
                     ).getResult();
-                    tileValues[fragment.tensorId] = runtimeInput;
+                    if (fragment.transitionId >= 0)
+                        transitionInputValues[fragment.transitionId] =
+                            runtimeInput;
+                    else
+                        tileValues[fragment.tensorId] = runtimeInput;
                 }
             }
             
@@ -1774,8 +2042,8 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
             auto *stageJson = (*stages)[stageObj.stageId].getAsObject();
             auto *layers = stageJson->getArray("layers");
 
-            for (const llvm::json::Value &layerValue : *layers) {
-                auto *layer = layerValue.getAsObject();
+            for (auto layerEntry : llvm::enumerate(*layers)) {
+                auto *layer = layerEntry.value().getAsObject();
                 auto *node = layer->getObject("node");
                 auto *inputs = layer->getArray("inputs");
                 auto *outputs = layer->getArray("outputs");
@@ -1783,6 +2051,65 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                 if (!nodeKind || !inputs || !outputs || outputs->empty()) {
                     llvm::errs() << "unsupported MAPS layer: missing node inputs or outputs\n";
                     return {};
+                }
+
+                for (auto inputEntry : llvm::enumerate(*inputs)) {
+                    auto *input = inputEntry.value().getAsObject();
+                    auto tensorId = input->getInteger("tensor_id");
+                    auto *source = input->getObject("source");
+                    auto sourceKind = source->getString("kind");
+                    if (sourceKind == "TRANSITION") {
+                        auto transitionId =
+                            source->getInteger("transition_id");
+                        Value transitionInput = transitionId
+                            ? transitionInputValues.lookup(*transitionId)
+                            : Value{};
+                        if (!tensorId || !transitionInput) {
+                            llvm::errs()
+                                << "transition input is unavailable on stage "
+                                << stageObj.stageId << " tile "
+                                << tileObj.hartId << "\n";
+                            return {};
+                        }
+                        tileValues[*tensorId] = transitionInput;
+                        continue;
+                    }
+                    if (sourceKind != "INITIALIZER")
+                        continue;
+
+                    const Fragment *initializer = nullptr;
+                    for (const Fragment &fragment : *initFragments) {
+                        if (fragment.dstHartId == tileObj.hartId &&
+                            fragment.destinationStageId == stageObj.stageId &&
+                            fragment.destinationLayerIndex ==
+                                static_cast<int64_t>(layerEntry.index()) &&
+                            fragment.destinationInputIndex ==
+                                static_cast<int64_t>(inputEntry.index())) {
+                            initializer = &fragment;
+                            break;
+                        }
+                    }
+                    if (!tensorId || !initializer) {
+                        llvm::errs()
+                            << "initializer input is unavailable on stage "
+                            << stageObj.stageId << " tile "
+                            << tileObj.hartId << "\n";
+                        return {};
+                    }
+                    auto *tensor =
+                        (*tensors)[initializer->tensorId].getAsObject();
+                    SmallVector<int64_t> shape;
+                    for (const SliceDim &dim : initializer->srcDims)
+                        shape.push_back(dim.length);
+                    Type elementType = parseElementType(*tensor, builder);
+                    Type resultType =
+                        RankedTensorType::get(shape, elementType);
+                    tileValues[*tensorId] = maps::LoadOp::create(
+                        builder,
+                        loc,
+                        resultType,
+                        SymbolRefAttr::get(ctx, initializer->slotName)
+                    ).getResult();
                 }
 
                 auto outputTensorId = getTensorId((*outputs)[0]);
@@ -2233,6 +2560,9 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
             for (const TransitionFragment &fragment : *transitionFragments) {
                 if (fragment.srcHartId != tileObj.hartId)
                     continue;
+                if (fragment.sourceStageId >= 0 &&
+                    fragment.sourceStageId != stageObj.stageId)
+                    continue;
 
                 Value source = tileValues.lookup(fragment.tensorId);
                 if (!source)
@@ -2283,6 +2613,9 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
             // send final output fragments back to L2
             for (const TransitionFragment &fragment : *outputFragments) {
                 if (fragment.srcHartId != tileObj.hartId)
+                    continue;
+                if (fragment.sourceStageId >= 0 &&
+                    fragment.sourceStageId != stageObj.stageId)
                     continue;
 
                 Value source = tileValues.lookup(fragment.tensorId);

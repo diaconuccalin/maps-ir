@@ -6,6 +6,7 @@ translator="${repo_root}/build/tools/maps-translate/maps-translate"
 fixture="${repo_root}/test/MapsToMagiaHeader/packed_weights.mlir"
 conv2d_fixture="${repo_root}/test/MapsToMagiaHeader/conv2d.json"
 descriptor_fixture="${repo_root}/test/MapsToMagiaHeader/descriptor_kernels.mlir"
+execution_plan_fixture="${repo_root}/test/MapsToMagiaHeader/execution_plan.json"
 sigmoid_fixture="${repo_root}/test/MapsToMagiaHeader/sigmoid.json"
 test_dir="$(mktemp -d)"
 trap 'rm -rf "${test_dir}"' EXIT
@@ -101,6 +102,28 @@ grep -q '.dims = {{0u, 1u, 1440u}, {0u, 2u, 720u}, {0u, 3u, 240u}, {0u, 4u, 60u}
 
 grep -q 'maps.kernel.*kind = "SIGMOID"' "${test_dir}/sigmoid.mlir"
 grep -q '.kind = OP_SIGMOID' "${test_dir}/sigmoid_generated.h"
+
+"${translator}" --json-to-maps "${execution_plan_fixture}" \
+  -o "${test_dir}/execution_plan.mlir"
+"${translator}" --maps-to-magia-header \
+  --maps-magia-output-stem=execution_plan \
+  --maps-magia-test-randomize-inputs \
+  "${test_dir}/execution_plan.mlir" \
+  -o "${test_dir}/execution_plan_generated.h"
+
+grep -q '@transition_0_destination_0' "${test_dir}/execution_plan.mlir"
+grep -q '@transition_1_transfer_0' "${test_dir}/execution_plan.mlir"
+grep -q '@transition_2_source_0' "${test_dir}/execution_plan.mlir"
+grep -q '@initializer_stage_0_layer_0_input_1_destination_0' \
+  "${test_dir}/execution_plan.mlir"
+test "$(grep -c 'maps.recv @transition_0_destination_0' \
+  "${test_dir}/execution_plan.mlir")" -eq 1
+test "$(grep -c 'maps.recv @transition_1_transfer_0' \
+  "${test_dir}/execution_plan.mlir")" -eq 1
+test "$(grep -c 'maps.send .*@transition_1_transfer_0' \
+  "${test_dir}/execution_plan.mlir")" -eq 1
+grep -q '.kind = OP_ADD' "${test_dir}/execution_plan_generated.h"
+grep -q '.kind = OP_SIGMOID' "${test_dir}/execution_plan_generated.h"
 
 package_dir="${test_dir}/package"
 source_weights="${test_dir}/source.weights.bin"

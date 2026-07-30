@@ -1,0 +1,224 @@
+{
+  "name": "execution_plan",
+  "execution": {"num_token_slots": 2},
+  "mesh": {
+    "width": 2,
+    "height": 1,
+    "l2_memory": {"size": 1048576},
+    "tiles": [
+      {"tile_id": 0, "x": 0, "y": 0},
+      {"tile_id": 1, "x": 1, "y": 0}
+    ]
+  },
+  "tensors": [
+    {
+      "name": "x",
+      "rank": 2,
+      "dims": [2, 2],
+      "elem_bytes": 2,
+      "is_initializer": false,
+      "dtype": null
+    },
+    {
+      "name": "w",
+      "rank": 2,
+      "dims": [2, 2],
+      "elem_bytes": 2,
+      "is_initializer": true,
+      "dtype": null
+    },
+    {
+      "name": "y",
+      "rank": 2,
+      "dims": [2, 2],
+      "elem_bytes": 2,
+      "is_initializer": false,
+      "dtype": null
+    },
+    {
+      "name": "z",
+      "rank": 2,
+      "dims": [2, 2],
+      "elem_bytes": 2,
+      "is_initializer": false,
+      "dtype": null
+    }
+  ],
+  "stages": [
+    {
+      "name": "add",
+      "submesh": {"submesh_id": 0, "tile_ids": [0]},
+      "virtual_to_physical": {"0": 0},
+      "layers": [
+        {
+          "node": {
+            "name": "add",
+            "kind": 1,
+            "inputs": [
+              {"name": "x", "rank": 2, "dims": [2, 2], "elem_bytes": 2},
+              {"name": "w", "rank": 2, "dims": [2, 2], "elem_bytes": 2}
+            ],
+            "outputs": [
+              {"name": "y", "rank": 2, "dims": [2, 2], "elem_bytes": 2}
+            ],
+            "payload": {"op_name": "Add", "work_kind": "ADD"},
+            "attributes": {}
+          },
+          "inputs": [
+            {
+              "tensor_id": 0,
+              "source": {"kind": "TRANSITION", "transition_id": 0}
+            },
+            {
+              "tensor_id": 1,
+              "source": {
+                "kind": "INITIALIZER",
+                "destinations": [
+                  {
+                    "tile_id": 0,
+                    "tensor_slice": {
+                      "rank": 2,
+                      "dims": [
+                        {"start": 0, "length": 2},
+                        {"start": 0, "length": 2}
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "outputs": [
+            {
+              "tensor_id": 2,
+              "layout": {
+                "submesh": {"submesh_id": 0, "tile_ids": [0]},
+                "mesh_x": {"mode": 0, "tensor_axis": null},
+                "mesh_y": {"mode": 0, "tensor_axis": null},
+                "logical_width": 1,
+                "logical_height": 1
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "sigmoid",
+      "submesh": {"submesh_id": 1, "tile_ids": [0]},
+      "virtual_to_physical": {"0": 0},
+      "layers": [
+        {
+          "node": {
+            "name": "sigmoid",
+            "kind": 1,
+            "inputs": [
+              {"name": "y", "rank": 2, "dims": [2, 2], "elem_bytes": 2}
+            ],
+            "outputs": [
+              {"name": "z", "rank": 2, "dims": [2, 2], "elem_bytes": 2}
+            ],
+            "payload": {"op_name": "Sigmoid", "work_kind": "SIGMOID"},
+            "attributes": {}
+          },
+          "inputs": [
+            {
+              "tensor_id": 2,
+              "source": {"kind": "TRANSITION", "transition_id": 1}
+            }
+          ],
+          "outputs": [
+            {
+              "tensor_id": 3,
+              "layout": {
+                "submesh": {"submesh_id": 1, "tile_ids": [0]},
+                "mesh_x": {"mode": 0, "tensor_axis": null},
+                "mesh_y": {"mode": 0, "tensor_axis": null},
+                "logical_width": 1,
+                "logical_height": 1
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "kind": "INPUT",
+      "tensor_id": 0,
+      "destination_stage_id": 0,
+      "destination_input_index": 0,
+      "destinations": [
+        {
+          "tile_id": 0,
+          "tensor_slice": {
+            "rank": 2,
+            "dims": [
+              {"start": 0, "length": 2},
+              {"start": 0, "length": 2}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "INTERMEDIATE",
+      "tensor_id": 2,
+      "source_stage_id": 0,
+      "source_output_index": 0,
+      "destination_stage_id": 1,
+      "destination_input_index": 0,
+      "transfers": [
+        {
+          "source_tile_id": 0,
+          "destination_tile_id": 0,
+          "source_subslice": {
+            "parent": {
+              "rank": 2,
+              "dims": [
+                {"start": 0, "length": 2},
+                {"start": 0, "length": 2}
+              ]
+            },
+            "dims": [
+              {"start": 0, "length": 2},
+              {"start": 0, "length": 2}
+            ]
+          },
+          "destination_subslice": {
+            "parent": {
+              "rank": 2,
+              "dims": [
+                {"start": 0, "length": 2},
+                {"start": 0, "length": 2}
+              ]
+            },
+            "dims": [
+              {"start": 0, "length": 2},
+              {"start": 0, "length": 2}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "OUTPUT",
+      "tensor_id": 3,
+      "source_stage_id": 1,
+      "source_output_index": 0,
+      "sources": [
+        {
+          "tile_id": 0,
+          "tensor_slice": {
+            "rank": 2,
+            "dims": [
+              {"start": 0, "length": 2},
+              {"start": 0, "length": 2}
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
