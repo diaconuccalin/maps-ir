@@ -1010,50 +1010,6 @@ parseTensorSubSlice(const llvm::json::Object &subslice) {
 }
 
 
-static std::optional<SmallVector<Fragment>> getInitFragments(const llvm::json::Array &initializations) {
-    SmallVector<Fragment> result;
-    
-    for (const llvm::json::Value &initValue : initializations) {
-        auto *init = initValue.getAsObject();
-
-        auto tensorId = init->getInteger("tensor_id");
-        auto *fragments = init->getArray("fragments");
-        auto name = init->getString("name");
-
-        for (const llvm::json::Value &fragmentValue : *fragments) {
-            auto *fragment = fragmentValue.getAsObject();
-            if (!fragment)
-                return std::nullopt;
-            
-            
-            auto srcHartId = fragment->getInteger("src_hartid");
-            auto dstHartId = fragment->getInteger("dst_hartid");
-            auto *srcSlice = fragment->getObject("src_slice");
-            auto *dstSlice = fragment->getObject("dst_slice");
-            
-            auto channelName = name->str() + "_from_L2_to_tile" + std::to_string(*dstHartId);
-
-            std::string slotBase = name->str();
-            if (llvm::StringRef(slotBase).starts_with("init_"))
-                slotBase = slotBase.substr(5);
-
-            auto slotName = slotBase + "_tile" + std::to_string(*dstHartId);
-            auto srcDims = parseSliceDims(*srcSlice);
-            auto dstDims = parseSliceDims(*dstSlice);
-
-            result.push_back(Fragment{
-                channelName,
-                slotName,
-                *tensorId,
-                *srcHartId,
-                *dstHartId,
-                *srcDims,
-                *dstDims,
-            });
-        }
-    }
-    return result;
-}
 
 static std::optional<SmallVector<Fragment>>
 getExecutionPlanInitializerFragments(const llvm::json::Array &stages) {
@@ -1113,81 +1069,6 @@ getExecutionPlanInitializerFragments(const llvm::json::Array &stages) {
 }
 
 
-static std::optional<TransitionFragmentVector> getTransitionFragments(const llvm::json::Array &transitions) {
-    TransitionFragmentVector result;
-    
-    for (const llvm::json::Value &transitionValue : transitions) {
-        auto *transition = transitionValue.getAsObject();
-        if (!transition)
-            return std::nullopt;
-
-        auto tensorId = transition->getInteger("tensor_id");
-        auto *fragments = transition->getArray("fragments");
-        auto name = transition->getString("name");
-
-        for (const llvm::json::Value &fragmentValue : *fragments) {
-            auto *fragment = fragmentValue.getAsObject();
-            if (!fragment)
-                return std::nullopt;
-            
-            auto srcHartId = fragment->getInteger("src_hartid");
-            auto dstHartId = fragment->getInteger("dst_hartid");
-            auto fragName = (name->str() + "_from_tile" + std::to_string(*srcHartId) +
-                             "_to_tile" + std::to_string(*dstHartId));
-
-            SmallVector<SliceDim> srcDims;
-            SmallVector<SliceDim> dstDims;
-            SmallVector<SliceDim> srcParentDims;
-            SmallVector<SliceDim> dstParentDims;
-            bool hasRelativeSubSlices = false;
-
-            if (auto *srcSubSlice = fragment->getObject("src_subslice")) {
-                auto *dstSubSlice = fragment->getObject("dst_subslice");
-                if (!dstSubSlice)
-                    return std::nullopt;
-
-                auto parsedSrc = parseTensorSubSlice(*srcSubSlice);
-                auto parsedDst = parseTensorSubSlice(*dstSubSlice);
-                if (!parsedSrc || !parsedDst)
-                    return std::nullopt;
-
-                srcParentDims = parsedSrc->first;
-                srcDims = parsedSrc->second;
-                dstParentDims = parsedDst->first;
-                dstDims = parsedDst->second;
-                hasRelativeSubSlices = true;
-            } else {
-                auto *srcSlice = fragment->getObject("src_slice");
-                auto *dstSlice = fragment->getObject("dst_slice");
-                if (!srcSlice || !dstSlice)
-                    return std::nullopt;
-
-                auto parsedSrcDims = parseSliceDims(*srcSlice);
-                auto parsedDstDims = parseSliceDims(*dstSlice);
-                if (!parsedSrcDims || !parsedDstDims)
-                    return std::nullopt;
-
-                srcDims = *parsedSrcDims;
-                dstDims = *parsedDstDims;
-                srcParentDims = srcDims;
-                dstParentDims = dstDims;
-            }
-
-            result.push_back(TransitionFragment{
-                fragName,
-                *tensorId,
-                *srcHartId,
-                *dstHartId,
-                srcDims,
-                dstDims,
-                srcParentDims,
-                dstParentDims,
-                hasRelativeSubSlices,
-            });
-        }
-    }
-    return result;
-}
 
 struct ExecutionPlanTransitionFragments {
     SmallVector<Fragment> inputs;
@@ -1328,49 +1209,6 @@ getExecutionPlanTransitionFragments(const llvm::json::Array &transitions) {
     return result;
 }
 
-static std::optional<TransitionFragmentVector> getFinalizationFragments(
-    const llvm::json::Array &finalizations) {
-    TransitionFragmentVector result;
-
-    for (const llvm::json::Value &finalizationValue : finalizations) {
-        auto *finalization = finalizationValue.getAsObject();
-        if (!finalization)
-            return std::nullopt;
-
-        auto tensorId = finalization->getInteger("tensor_id");
-        auto *fragments = finalization->getArray("fragments");
-        auto name = finalization->getString("name");
-
-        for (const llvm::json::Value &fragmentValue : *fragments) {
-            auto *fragment = fragmentValue.getAsObject();
-            if (!fragment)
-                return std::nullopt;
-
-            auto srcHartId = fragment->getInteger("src_hartid");
-            auto dstHartId = fragment->getInteger("dst_hartid");
-            auto *srcSlice = fragment->getObject("src_slice");
-            auto *dstSlice = fragment->getObject("dst_slice");
-            auto fragName = (name->str() + "_from_tile" + std::to_string(*srcHartId) +
-                             "_to_L2");
-
-            auto srcDims = parseSliceDims(*srcSlice);
-            auto dstDims = parseSliceDims(*dstSlice);
-
-            result.push_back(TransitionFragment{
-                fragName,
-                *tensorId,
-                *srcHartId,
-                *dstHartId,
-                *srcDims,
-                *dstDims,
-                *srcDims,
-                *dstDims,
-                false,
-            });
-        }
-    }
-    return result;
-}
 
 
 static std::optional<SmallVector<Tile>> getTileObjs(const llvm::json::Array &tiles) {
@@ -1468,16 +1306,14 @@ static std::optional<SmallVector<Stage>>getStageObjs(const llvm::json::Array &st
 
 static std::optional<llvm::SetVector<int64_t>>
 collectInputTensorIds(const llvm::json::Array &stages,
-                      const llvm::json::Array *transitions = nullptr) {
+                      const llvm::json::Array &transitions) {
 
     llvm::SetVector<int64_t> ids;
 
-    if (transitions) {
-        for (const llvm::json::Value &transitionValue : *transitions) {
-            auto *transition = transitionValue.getAsObject();
-            if (transition->getString("kind") == "INPUT")
-                ids.insert(*transition->getInteger("tensor_id"));
-        }
+    for (const llvm::json::Value &transitionValue : transitions) {
+        auto *transition = transitionValue.getAsObject();
+        if (transition->getString("kind") == "INPUT")
+            ids.insert(*transition->getInteger("tensor_id"));
     }
 
     for (const llvm::json::Value &stageValue : stages) {
@@ -1494,8 +1330,7 @@ collectInputTensorIds(const llvm::json::Array &stages,
             std::optional<int64_t> tensorId = input->getInteger("tensor_id");
             auto *source = input->getObject("source");
 
-            if (source->getInteger("base_addr") ||
-                source->getString("kind") == "INITIALIZER")
+            if (source->getString("kind") == "INITIALIZER")
                 ids.insert(*tensorId);
             }
         }
@@ -1524,14 +1359,10 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
     auto *tensors = root->getArray("tensors");
     auto *stages = root->getArray("stages");
     auto *transitions = root->getArray("transitions");
-    bool usesExecutionPlanTransitions =
-        !root->getArray("initializations") &&
-        !root->getArray("finalizations");
 
     std::optional<StringRef> netName = root->getString("name");
 
-    auto inputTensorIds = *collectInputTensorIds(
-        *stages, usesExecutionPlanTransitions ? transitions : nullptr);
+    auto inputTensorIds = *collectInputTensorIds(*stages, *transitions);
 
     OpBuilder builder(ctx);
     Location loc = builder.getUnknownLoc();
@@ -1627,31 +1458,18 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
     init.getBody().emplaceBlock();
     builder.setInsertionPointToStart(&init.getBody().front());
 
-    // obtain boundary and intermediate movement from either supported schema
-    std::optional<SmallVector<Fragment>> initFragments;
-    std::optional<TransitionFragmentVector> transitionFragments;
-    std::optional<TransitionFragmentVector> outputFragments;
-    if (usesExecutionPlanTransitions) {
-        initFragments = getExecutionPlanInitializerFragments(*stages);
-        auto executionPlanFragments =
-            getExecutionPlanTransitionFragments(*transitions);
-        if (!initFragments || !executionPlanFragments)
-            return {};
-        initFragments->append(
-            executionPlanFragments->inputs.begin(),
-            executionPlanFragments->inputs.end());
-        transitionFragments =
-            std::move(executionPlanFragments->intermediates);
-        outputFragments = std::move(executionPlanFragments->outputs);
-    } else {
-        auto *initializations = root->getArray("initializations");
-        auto *finalizations = root->getArray("finalizations");
-        initFragments = getInitFragments(*initializations);
-        transitionFragments = getTransitionFragments(*transitions);
-        outputFragments = getFinalizationFragments(*finalizations);
-    }
-    if (!initFragments || !transitionFragments || !outputFragments)
+    auto initFragments = getExecutionPlanInitializerFragments(*stages);
+    auto executionPlanFragments =
+        getExecutionPlanTransitionFragments(*transitions);
+    if (!initFragments || !executionPlanFragments)
         return {};
+    initFragments->append(
+        executionPlanFragments->inputs.begin(),
+        executionPlanFragments->inputs.end());
+    TransitionFragmentVector transitionFragments =
+        std::move(executionPlanFragments->intermediates);
+    TransitionFragmentVector outputFragments =
+        std::move(executionPlanFragments->outputs);
 
     // map input tensor ids to main function arguments
     llvm::DenseMap<int64_t, Value> inputTensorValues;
@@ -1869,7 +1687,7 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
             llvm::DenseMap<int64_t, Value> transitionInputValues;
 
             // receive transition fragments from producer tiles
-            for (const TransitionFragment &fragment : *transitionFragments) {
+            for (const TransitionFragment &fragment : transitionFragments) {
                 if (fragment.dstHartId != tileObj.hartId)
                     continue;
                 if (fragment.destinationStageId >= 0 &&
@@ -2557,7 +2375,7 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
             }
 
             // send transition fragments produced by this tile
-            for (const TransitionFragment &fragment : *transitionFragments) {
+            for (const TransitionFragment &fragment : transitionFragments) {
                 if (fragment.srcHartId != tileObj.hartId)
                     continue;
                 if (fragment.sourceStageId >= 0 &&
@@ -2573,7 +2391,7 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                 SmallVector<OpFoldResult> sizes;
                 SmallVector<OpFoldResult> strides;
                 SmallVector<int64_t> localStarts =
-                    getLocalStartsForSourceTile(*transitionFragments, fragment);
+                    getLocalStartsForSourceTile(transitionFragments, fragment);
 
                 for (auto indexed : llvm::enumerate(fragment.srcDims)) {
                     const SliceDim &dim = indexed.value();
@@ -2611,7 +2429,7 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
             }
 
             // send final output fragments back to L2
-            for (const TransitionFragment &fragment : *outputFragments) {
+            for (const TransitionFragment &fragment : outputFragments) {
                 if (fragment.srcHartId != tileObj.hartId)
                     continue;
                 if (fragment.sourceStageId >= 0 &&
@@ -2627,7 +2445,7 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                 SmallVector<OpFoldResult> sizes;
                 SmallVector<OpFoldResult> strides;
                 SmallVector<int64_t> localStarts =
-                    getLocalStartsForSourceTile(*outputFragments, fragment);
+                    getLocalStartsForSourceTile(outputFragments, fragment);
 
                 for (auto indexed : llvm::enumerate(fragment.srcDims)) {
                     const SliceDim &dim = indexed.value();
@@ -2673,7 +2491,7 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
 
     // receive final output fragments from tiles and assemble them in L2
     llvm::DenseMap<int64_t, Value> outputTensorValues = OutputTensorInitValues;
-    for (const TransitionFragment &fragment : *outputFragments) {
+    for (const TransitionFragment &fragment : outputFragments) {
         auto *tensor = (*tensors)[fragment.tensorId].getAsObject();
         SmallVector<int64_t> shape;
         SmallVector<OpFoldResult> offsets;
