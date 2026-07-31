@@ -76,7 +76,7 @@ A send operation in the init region that starts from src = -1. This is the encod
     // Get operation that defines this tensor
     Operation *definingOp = sentValue.getDefiningOp();
 
-    // Ensure the operation that generates this tensor is a fragmentation operation; should always be this but hey
+    // Ensure the operation that generates this tensor is a slice extraction operation; should always be this but hey
     if (!definingOp || definingOp->getName().getStringRef() != "tensor.extract_slice")
       return;
 

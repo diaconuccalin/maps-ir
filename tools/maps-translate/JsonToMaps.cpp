@@ -41,8 +41,8 @@ struct SliceDim {
     int64_t length;
 };
 
-struct Fragment {
-    std::string name;      // channel name
+struct L2SourceChannelBinding {
+    std::string channelName;
     std::string slotName;  // local tile storage name
     int64_t tensorId;
     int64_t srcHartId;
@@ -55,8 +55,8 @@ struct Fragment {
     int64_t destinationInputIndex = -1;
 };
 
-struct TransitionFragment {
-    std::string name;
+struct TileSourceChannelBinding {
+    std::string channelName;
     int64_t tensorId;
     int64_t srcHartId;
     int64_t dstHartId;
@@ -70,7 +70,7 @@ struct TransitionFragment {
     int64_t destinationStageId = -1;
 };
 
-using TransitionFragmentVector = SmallVector<TransitionFragment, 0>;
+using TileSourceChannelBindingVector = SmallVector<TileSourceChannelBinding, 0>;
 
 struct Tile{
     int64_t hartId;
@@ -617,20 +617,20 @@ static SliceDim partitionDim(int64_t size, int64_t parts, int64_t index) {
 }
 
 
-static SmallVector<int64_t> getLocalStartsForSourceTile(ArrayRef<TransitionFragment> fragments,
-                                                        const TransitionFragment &selected) {
+static SmallVector<int64_t> getLocalStartsForSourceTile(ArrayRef<TileSourceChannelBinding> bindings,
+                                                        const TileSourceChannelBinding &selected) {
     SmallVector<int64_t> starts;
     starts.reserve(selected.srcDims.size());
     for (const SliceDim &dim : selected.srcDims)
         starts.push_back(dim.start);
 
-    for (const TransitionFragment &fragment : fragments) {
-        if (fragment.tensorId != selected.tensorId ||
-            fragment.srcHartId != selected.srcHartId ||
-            fragment.srcDims.size() != starts.size())
+    for (const TileSourceChannelBinding &binding : bindings) {
+        if (binding.tensorId != selected.tensorId ||
+            binding.srcHartId != selected.srcHartId ||
+            binding.srcDims.size() != starts.size())
             continue;
 
-        for (auto indexed : llvm::enumerate(fragment.srcDims))
+        for (auto indexed : llvm::enumerate(binding.srcDims))
             starts[indexed.index()] = std::min(starts[indexed.index()], indexed.value().start);
     }
 
@@ -981,16 +981,16 @@ static DenseI64ArrayAttr getSliceDimsAttr(OpBuilder &builder,
 }
 
 
-static void setTransitionSubSliceAttrs(Operation *op,
-                                       const TransitionFragment &fragment,
+static void setTransferSubSliceAttrs(Operation *op,
+                                       const TileSourceChannelBinding &binding,
                                        OpBuilder &builder) {
-    if (!fragment.hasRelativeSubSlices)
+    if (!binding.hasRelativeSubSlices)
         return;
 
-    op->setAttr("src_parent_slice", getSliceDimsAttr(builder, fragment.srcParentDims));
-    op->setAttr("src_subslice", getSliceDimsAttr(builder, fragment.srcDims));
-    op->setAttr("dst_parent_slice", getSliceDimsAttr(builder, fragment.dstParentDims));
-    op->setAttr("dst_subslice", getSliceDimsAttr(builder, fragment.dstDims));
+    op->setAttr("src_parent_slice", getSliceDimsAttr(builder, binding.srcParentDims));
+    op->setAttr("src_subslice", getSliceDimsAttr(builder, binding.srcDims));
+    op->setAttr("dst_parent_slice", getSliceDimsAttr(builder, binding.dstParentDims));
+    op->setAttr("dst_subslice", getSliceDimsAttr(builder, binding.dstDims));
 }
 
 
@@ -1011,9 +1011,9 @@ parseTensorSubSlice(const llvm::json::Object &subslice) {
 
 
 
-static std::optional<SmallVector<Fragment>>
-getExecutionPlanInitializerFragments(const llvm::json::Array &stages) {
-    SmallVector<Fragment> result;
+static std::optional<SmallVector<L2SourceChannelBinding>>
+getInitializerChannelBindings(const llvm::json::Array &stages) {
+    SmallVector<L2SourceChannelBinding> result;
 
     for (auto stageEntry : llvm::enumerate(stages)) {
         auto *stage = stageEntry.value().getAsObject();
@@ -1047,7 +1047,7 @@ getExecutionPlanInitializerFragments(const llvm::json::Array &stages) {
                         std::to_string(layerEntry.index()) + "_input_" +
                         std::to_string(inputEntry.index()) + "_destination_" +
                         std::to_string(destinationEntry.index());
-                    result.push_back(Fragment{
+                    result.push_back(L2SourceChannelBinding{
                         name,
                         name + "_slot",
                         *tensorId,
@@ -1070,15 +1070,15 @@ getExecutionPlanInitializerFragments(const llvm::json::Array &stages) {
 
 
 
-struct ExecutionPlanTransitionFragments {
-    SmallVector<Fragment> inputs;
-    TransitionFragmentVector intermediates;
-    TransitionFragmentVector outputs;
+struct ExecutionPlanChannelBindings {
+    SmallVector<L2SourceChannelBinding> inputs;
+    TileSourceChannelBindingVector intermediates;
+    TileSourceChannelBindingVector outputs;
 };
 
-static std::optional<ExecutionPlanTransitionFragments>
-getExecutionPlanTransitionFragments(const llvm::json::Array &transitions) {
-    ExecutionPlanTransitionFragments result;
+static std::optional<ExecutionPlanChannelBindings>
+getExecutionPlanChannelBindings(const llvm::json::Array &transitions) {
+    ExecutionPlanChannelBindings result;
 
     for (auto transitionEntry : llvm::enumerate(transitions)) {
         auto *transition = transitionEntry.value().getAsObject();
@@ -1106,7 +1106,7 @@ getExecutionPlanTransitionFragments(const llvm::json::Array &transitions) {
                 if (!tileId || !dims)
                     return std::nullopt;
 
-                result.inputs.push_back(Fragment{
+                result.inputs.push_back(L2SourceChannelBinding{
                     transitionName + "_destination_" +
                         std::to_string(destinationEntry.index()),
                     "",
@@ -1150,7 +1150,7 @@ getExecutionPlanTransitionFragments(const llvm::json::Array &transitions) {
                     !parsedSource || !parsedDestination)
                     return std::nullopt;
 
-                result.intermediates.push_back(TransitionFragment{
+                result.intermediates.push_back(TileSourceChannelBinding{
                     transitionName + "_transfer_" +
                         std::to_string(transferEntry.index()),
                     *tensorId,
@@ -1185,7 +1185,7 @@ getExecutionPlanTransitionFragments(const llvm::json::Array &transitions) {
                 if (!tileId || !dims)
                     return std::nullopt;
 
-                result.outputs.push_back(TransitionFragment{
+                result.outputs.push_back(TileSourceChannelBinding{
                     transitionName + "_source_" +
                         std::to_string(sourceEntry.index()),
                     *tensorId,
@@ -1458,18 +1458,18 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
     init.getBody().emplaceBlock();
     builder.setInsertionPointToStart(&init.getBody().front());
 
-    auto initFragments = getExecutionPlanInitializerFragments(*stages);
-    auto executionPlanFragments =
-        getExecutionPlanTransitionFragments(*transitions);
-    if (!initFragments || !executionPlanFragments)
+    auto l2SourceBindings = getInitializerChannelBindings(*stages);
+    auto executionPlanBindings =
+        getExecutionPlanChannelBindings(*transitions);
+    if (!l2SourceBindings || !executionPlanBindings)
         return {};
-    initFragments->append(
-        executionPlanFragments->inputs.begin(),
-        executionPlanFragments->inputs.end());
-    TransitionFragmentVector transitionFragments =
-        std::move(executionPlanFragments->intermediates);
-    TransitionFragmentVector outputFragments =
-        std::move(executionPlanFragments->outputs);
+    l2SourceBindings->append(
+        executionPlanBindings->inputs.begin(),
+        executionPlanBindings->inputs.end());
+    TileSourceChannelBindingVector intermediateBindings =
+        std::move(executionPlanBindings->intermediates);
+    TileSourceChannelBindingVector outputBindings =
+        std::move(executionPlanBindings->outputs);
 
     // map input tensor ids to main function arguments
     llvm::DenseMap<int64_t, Value> inputTensorValues;
@@ -1479,19 +1479,19 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
         inputTensorValues[tensorId] = mainEntry->getArgument(argIndex);
     }
 
-    // extract slices from input tensors for each fragment
-    for (const Fragment &fragment : *initFragments) {
-        auto *tensor = (*tensors)[fragment.tensorId].getAsObject();
+    // extract slices from input tensors for each binding
+    for (const L2SourceChannelBinding &binding : *l2SourceBindings) {
+        auto *tensor = (*tensors)[binding.tensorId].getAsObject();
         if (!isInitializerTensor(*tensor))
             continue;
-        Value source = inputTensorValues.lookup(fragment.tensorId);
+        Value source = inputTensorValues.lookup(binding.tensorId);
         
         SmallVector<int64_t> shape;
         SmallVector<OpFoldResult> offsets;
         SmallVector<OpFoldResult> sizes;
         SmallVector<OpFoldResult> strides;
 
-        for (const SliceDim &dim : fragment.srcDims) {
+        for (const SliceDim &dim : binding.srcDims) {
             shape.push_back(dim.length);
             offsets.push_back(builder.getIndexAttr(dim.start));
             sizes.push_back(builder.getIndexAttr(dim.length));
@@ -1502,7 +1502,7 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
         auto sourceType = cast<RankedTensorType>(source.getType());
         auto sliceType = RankedTensorType::get(shape, sourceType.getElementType());
 
-        // create extract_slice op for the fragment, considering tile usage
+        // create extract_slice op for the binding, considering tile usage
         Value slice = tensor::ExtractSliceOp::create(
             builder, 
             loc, 
@@ -1513,14 +1513,14 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
             strides
         );
 
-        // create send op for initializers fragments
+        // create send op for initializer bindings
         maps::SendOp::create(
             builder, 
             loc, 
             slice, 
-            SymbolRefAttr::get(ctx, fragment.name),
-            builder.getI64IntegerAttr(fragment.srcHartId),
-            builder.getI64IntegerAttr(fragment.dstHartId)
+            SymbolRefAttr::get(ctx, binding.channelName),
+            builder.getI64IntegerAttr(binding.srcHartId),
+            builder.getI64IntegerAttr(binding.dstHartId)
         );
     }
 
@@ -1530,9 +1530,9 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
     auto tileObjs = getTileObjs(*tiles);
     auto stageObjs = getStageObjs(*stages);
     for (const Tile &tileObj : *tileObjs) {
-        bool receivesInitializer = llvm::any_of(*initFragments, [&](const Fragment &fragment) {
-            auto *tensor = (*tensors)[fragment.tensorId].getAsObject();
-            return fragment.dstHartId == tileObj.hartId &&
+        bool receivesInitializer = llvm::any_of(*l2SourceBindings, [&](const L2SourceChannelBinding &binding) {
+            auto *tensor = (*tensors)[binding.tensorId].getAsObject();
+            return binding.dstHartId == tileObj.hartId &&
                    isInitializerTensor(*tensor);
         });
         if (!receivesInitializer)
@@ -1550,30 +1550,30 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
         tile.getBody().emplaceBlock();
         builder.setInsertionPointToStart(&tile.getBody().front());
 
-        // check which tiles receive which fragments
-        for (const Fragment &fragment : *initFragments) {
-            if (fragment.dstHartId != tileObj.hartId)
-                continue; // tile doesn't receive this fragment
+        // check which tiles receive which bindings
+        for (const L2SourceChannelBinding &binding : *l2SourceBindings) {
+            if (binding.dstHartId != tileObj.hartId)
+                continue; // tile doesn't receive this binding
 
-            auto *tensor = (*tensors)[fragment.tensorId].getAsObject();
+            auto *tensor = (*tensors)[binding.tensorId].getAsObject();
             if (!isInitializerTensor(*tensor))
                 continue;
 
             SmallVector<int64_t> shape;
-            for (const SliceDim &dim : fragment.srcDims)
+            for (const SliceDim &dim : binding.srcDims)
                 shape.push_back(dim.length);
 
             Type elementType = parseElementType(*tensor, builder);
             Type resultType = RankedTensorType::get(shape, elementType);
 
-            // create recv op for the fragment
+            // create recv op for the binding
             auto recv = maps::RecvOp::create(
                 builder,
                 loc,
                 resultType,
-                StringRef(fragment.name),
-                fragment.srcHartId,
-                fragment.dstHartId
+                StringRef(binding.channelName),
+                binding.srcHartId,
+                binding.dstHartId
             );
 
             // store result
@@ -1581,7 +1581,7 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                 builder,
                 loc,
                 recv.getResult(),
-                SymbolRefAttr::get(ctx, fragment.slotName)
+                SymbolRefAttr::get(ctx, binding.slotName)
             );
         }
 
@@ -1612,33 +1612,33 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
         builder.setInsertionPointToStart(&stage.getBody().front());
 
         // slice and send runtime inputs consumed by this stage before tile bodies
-        for (const Fragment &fragment : *initFragments) {
-            auto *tensor = (*tensors)[fragment.tensorId].getAsObject();
+        for (const L2SourceChannelBinding &binding : *l2SourceBindings) {
+            auto *tensor = (*tensors)[binding.tensorId].getAsObject();
             if (isInitializerTensor(*tensor))
                 continue;
-            if (fragment.destinationStageId >= 0 &&
-                fragment.destinationStageId != stageObj.stageId)
+            if (binding.destinationStageId >= 0 &&
+                binding.destinationStageId != stageObj.stageId)
                 continue;
 
-            bool isFragmentInStage = false;
+            bool isBindingInStage = false;
             for (const Tile &tileObj : *tileObjs) {
-                if (fragment.dstHartId == tileObj.hartId &&
+                if (binding.dstHartId == tileObj.hartId &&
                     isTileInStage(tileObj, stageObj)) {
-                    isFragmentInStage = true;
+                    isBindingInStage = true;
                     break;
                 }
             }
-            if (!isFragmentInStage)
+            if (!isBindingInStage)
                 continue;
 
-            Value source = inputTensorValues.lookup(fragment.tensorId);
+            Value source = inputTensorValues.lookup(binding.tensorId);
 
             SmallVector<int64_t> shape;
             SmallVector<OpFoldResult> offsets;
             SmallVector<OpFoldResult> sizes;
             SmallVector<OpFoldResult> strides;
 
-            for (const SliceDim &dim : fragment.srcDims) {
+            for (const SliceDim &dim : binding.srcDims) {
                 shape.push_back(dim.length);
                 offsets.push_back(builder.getIndexAttr(dim.start));
                 sizes.push_back(builder.getIndexAttr(dim.length));
@@ -1655,9 +1655,9 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                 builder,
                 loc,
                 slice,
-                SymbolRefAttr::get(ctx, fragment.name),
-                builder.getI64IntegerAttr(fragment.srcHartId),
-                builder.getI64IntegerAttr(fragment.dstHartId)
+                SymbolRefAttr::get(ctx, binding.channelName),
+                builder.getI64IntegerAttr(binding.srcHartId),
+                builder.getI64IntegerAttr(binding.dstHartId)
             );
         }
         
@@ -1683,20 +1683,20 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
             builder.setInsertionPointToStart(&tile.getBody().front());
 
             llvm::DenseMap<int64_t, Value> tileValues;
-            llvm::DenseMap<int64_t, SmallVector<std::pair<const TransitionFragment *, Value>>> transitionValues;
+            llvm::DenseMap<int64_t, SmallVector<std::pair<const TileSourceChannelBinding *, Value>>> transitionValues;
             llvm::DenseMap<int64_t, Value> transitionInputValues;
 
-            // receive transition fragments from producer tiles
-            for (const TransitionFragment &fragment : transitionFragments) {
-                if (fragment.dstHartId != tileObj.hartId)
+            // receive intermediate channel bindings from producer tiles
+            for (const TileSourceChannelBinding &binding : intermediateBindings) {
+                if (binding.dstHartId != tileObj.hartId)
                     continue;
-                if (fragment.destinationStageId >= 0 &&
-                    fragment.destinationStageId != stageObj.stageId)
+                if (binding.destinationStageId >= 0 &&
+                    binding.destinationStageId != stageObj.stageId)
                     continue;
 
-                auto *tensor = (*tensors)[fragment.tensorId].getAsObject();
+                auto *tensor = (*tensors)[binding.tensorId].getAsObject();
                 SmallVector<int64_t> shape;
-                for (const SliceDim &dim : fragment.srcDims)
+                for (const SliceDim &dim : binding.srcDims)
                     shape.push_back(dim.length);
 
                 Type elementType = parseElementType(*tensor, builder);
@@ -1706,49 +1706,49 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                     builder,
                     loc,
                     resultType,
-                    StringRef(fragment.name),
-                    fragment.srcHartId,
-                    fragment.dstHartId
+                    StringRef(binding.channelName),
+                    binding.srcHartId,
+                    binding.dstHartId
                 );
-                setTransitionSubSliceAttrs(recv.getOperation(), fragment, builder);
+                setTransferSubSliceAttrs(recv.getOperation(), binding, builder);
                 Value transitionInput = recv.getResult();
-                int64_t bindingId = fragment.transitionId >= 0
-                    ? fragment.transitionId
-                    : fragment.tensorId;
+                int64_t bindingId = binding.transitionId >= 0
+                    ? binding.transitionId
+                    : binding.tensorId;
                 transitionValues[bindingId].push_back(
-                    {&fragment, transitionInput});
+                    {&binding, transitionInput});
             }
 
             for (auto &entry : transitionValues) {
-                SmallVector<std::pair<const TransitionFragment *, Value>> &values = entry.second;
+                SmallVector<std::pair<const TileSourceChannelBinding *, Value>> &values = entry.second;
                 if (values.size() == 1) {
-                    const TransitionFragment &fragment =
+                    const TileSourceChannelBinding &binding =
                         *values.front().first;
-                    if (fragment.transitionId >= 0)
-                        transitionInputValues[fragment.transitionId] =
+                    if (binding.transitionId >= 0)
+                        transitionInputValues[binding.transitionId] =
                             values.front().second;
                     else
-                        tileValues[fragment.tensorId] =
+                        tileValues[binding.tensorId] =
                             values.front().second;
                     continue;
                 }
 
-                TransitionFragmentVector fragments;
-                fragments.reserve(values.size());
+                TileSourceChannelBindingVector bindings;
+                bindings.reserve(values.size());
                 for (const auto &value : values) {
-                    fragments.push_back(*value.first);
+                    bindings.push_back(*value.first);
                 }
 
                 SmallVector<int64_t> starts;
                 SmallVector<int64_t> ends;
 
-                for (const SliceDim &dim : fragments.front().dstDims) {
+                for (const SliceDim &dim : bindings.front().dstDims) {
                     starts.push_back(dim.start);
                     ends.push_back(dim.start + dim.length);
                 }
 
-                for (const TransitionFragment &fragment : fragments) {
-                    for (auto indexed : llvm::enumerate(fragment.dstDims)) {
+                for (const TileSourceChannelBinding &binding : bindings) {
+                    for (auto indexed : llvm::enumerate(binding.dstDims)) {
                         starts[indexed.index()] =
                             std::min(starts[indexed.index()], indexed.value().start);
 
@@ -1796,29 +1796,29 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                     ).getResult();
                 }
 
-                const TransitionFragment &fragment = fragments.front();
-                if (fragment.transitionId >= 0)
-                    transitionInputValues[fragment.transitionId] = assembled;
+                const TileSourceChannelBinding &binding = bindings.front();
+                if (binding.transitionId >= 0)
+                    transitionInputValues[binding.transitionId] = assembled;
                 else
-                    tileValues[fragment.tensorId] = assembled;
+                    tileValues[binding.tensorId] = assembled;
                 continue;
             }
 
             // load stored values and receive runtime inputs
-            for (const Fragment &fragment : *initFragments) {
-                if (fragment.dstHartId != tileObj.hartId)
+            for (const L2SourceChannelBinding &binding : *l2SourceBindings) {
+                if (binding.dstHartId != tileObj.hartId)
                     continue;
-                if (fragment.destinationStageId >= 0 &&
-                    fragment.destinationStageId != stageObj.stageId)
+                if (binding.destinationStageId >= 0 &&
+                    binding.destinationStageId != stageObj.stageId)
                     continue;
 
-                auto *tensor = (*tensors)[fragment.tensorId].getAsObject();
+                auto *tensor = (*tensors)[binding.tensorId].getAsObject();
                 if (isInitializerTensor(*tensor)) {
-                    if (fragment.destinationLayerIndex >= 0)
+                    if (binding.destinationLayerIndex >= 0)
                         continue;
-                    // load init fragments
+                    // load init bindings
                     SmallVector<int64_t> shape;
-                    for (const SliceDim &dim : fragment.srcDims)
+                    for (const SliceDim &dim : binding.srcDims)
                         shape.push_back(dim.length);
 
                     Type elementType = parseElementType(*tensor, builder);
@@ -1828,13 +1828,13 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                         builder,
                         loc,
                         resultType,
-                        SymbolRefAttr::get(ctx, fragment.slotName)
+                        SymbolRefAttr::get(ctx, binding.slotName)
                     ).getResult();
-                    tileValues[fragment.tensorId] = localValue;
+                    tileValues[binding.tensorId] = localValue;
                 } else {
                     // receive inputs
                     SmallVector<int64_t> shape;
-                    for (const SliceDim &dim : fragment.srcDims)
+                    for (const SliceDim &dim : binding.srcDims)
                         shape.push_back(dim.length);
             
                     Type elementType = parseElementType(*tensor, builder);
@@ -1844,15 +1844,15 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                         builder,
                         loc,
                         resultType,
-                        StringRef(fragment.name),
-                        fragment.srcHartId,
-                        fragment.dstHartId
+                        StringRef(binding.channelName),
+                        binding.srcHartId,
+                        binding.dstHartId
                     ).getResult();
-                    if (fragment.transitionId >= 0)
-                        transitionInputValues[fragment.transitionId] =
+                    if (binding.transitionId >= 0)
+                        transitionInputValues[binding.transitionId] =
                             runtimeInput;
                     else
-                        tileValues[fragment.tensorId] = runtimeInput;
+                        tileValues[binding.tensorId] = runtimeInput;
                 }
             }
             
@@ -1895,15 +1895,15 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                     if (sourceKind != "INITIALIZER")
                         continue;
 
-                    const Fragment *initializer = nullptr;
-                    for (const Fragment &fragment : *initFragments) {
-                        if (fragment.dstHartId == tileObj.hartId &&
-                            fragment.destinationStageId == stageObj.stageId &&
-                            fragment.destinationLayerIndex ==
+                    const L2SourceChannelBinding *initializer = nullptr;
+                    for (const L2SourceChannelBinding &binding : *l2SourceBindings) {
+                        if (binding.dstHartId == tileObj.hartId &&
+                            binding.destinationStageId == stageObj.stageId &&
+                            binding.destinationLayerIndex ==
                                 static_cast<int64_t>(layerEntry.index()) &&
-                            fragment.destinationInputIndex ==
+                            binding.destinationInputIndex ==
                                 static_cast<int64_t>(inputEntry.index())) {
-                            initializer = &fragment;
+                            initializer = &binding;
                             break;
                         }
                     }
@@ -2374,15 +2374,15 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                 return {};
             }
 
-            // send transition fragments produced by this tile
-            for (const TransitionFragment &fragment : transitionFragments) {
-                if (fragment.srcHartId != tileObj.hartId)
+            // send intermediate channel bindings produced by this tile
+            for (const TileSourceChannelBinding &binding : intermediateBindings) {
+                if (binding.srcHartId != tileObj.hartId)
                     continue;
-                if (fragment.sourceStageId >= 0 &&
-                    fragment.sourceStageId != stageObj.stageId)
+                if (binding.sourceStageId >= 0 &&
+                    binding.sourceStageId != stageObj.stageId)
                     continue;
 
-                Value source = tileValues.lookup(fragment.tensorId);
+                Value source = tileValues.lookup(binding.tensorId);
                 if (!source)
                     continue;
 
@@ -2391,11 +2391,11 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                 SmallVector<OpFoldResult> sizes;
                 SmallVector<OpFoldResult> strides;
                 SmallVector<int64_t> localStarts =
-                    getLocalStartsForSourceTile(transitionFragments, fragment);
+                    getLocalStartsForSourceTile(intermediateBindings, binding);
 
-                for (auto indexed : llvm::enumerate(fragment.srcDims)) {
+                for (auto indexed : llvm::enumerate(binding.srcDims)) {
                     const SliceDim &dim = indexed.value();
-                    int64_t localOffset = fragment.hasRelativeSubSlices
+                    int64_t localOffset = binding.hasRelativeSubSlices
                         ? dim.start
                         : dim.start - localStarts[indexed.index()];
                     shape.push_back(dim.length);
@@ -2421,22 +2421,22 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                     builder,
                     loc,
                     slice,
-                    SymbolRefAttr::get(ctx, fragment.name),
-                    builder.getI64IntegerAttr(fragment.srcHartId),
-                    builder.getI64IntegerAttr(fragment.dstHartId)
+                    SymbolRefAttr::get(ctx, binding.channelName),
+                    builder.getI64IntegerAttr(binding.srcHartId),
+                    builder.getI64IntegerAttr(binding.dstHartId)
                 );
-                setTransitionSubSliceAttrs(send.getOperation(), fragment, builder);
+                setTransferSubSliceAttrs(send.getOperation(), binding, builder);
             }
 
-            // send final output fragments back to L2
-            for (const TransitionFragment &fragment : outputFragments) {
-                if (fragment.srcHartId != tileObj.hartId)
+            // send final output bindings back to L2
+            for (const TileSourceChannelBinding &binding : outputBindings) {
+                if (binding.srcHartId != tileObj.hartId)
                     continue;
-                if (fragment.sourceStageId >= 0 &&
-                    fragment.sourceStageId != stageObj.stageId)
+                if (binding.sourceStageId >= 0 &&
+                    binding.sourceStageId != stageObj.stageId)
                     continue;
 
-                Value source = tileValues.lookup(fragment.tensorId);
+                Value source = tileValues.lookup(binding.tensorId);
                 if (!source)
                     continue;
 
@@ -2445,9 +2445,9 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                 SmallVector<OpFoldResult> sizes;
                 SmallVector<OpFoldResult> strides;
                 SmallVector<int64_t> localStarts =
-                    getLocalStartsForSourceTile(outputFragments, fragment);
+                    getLocalStartsForSourceTile(outputBindings, binding);
 
-                for (auto indexed : llvm::enumerate(fragment.srcDims)) {
+                for (auto indexed : llvm::enumerate(binding.srcDims)) {
                     const SliceDim &dim = indexed.value();
                     int64_t localOffset = dim.start - localStarts[indexed.index()];
                     shape.push_back(dim.length);
@@ -2473,9 +2473,9 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                     builder,
                     loc,
                     slice,
-                    SymbolRefAttr::get(ctx, fragment.name),
-                    builder.getI64IntegerAttr(fragment.srcHartId),
-                    builder.getI64IntegerAttr(fragment.dstHartId)
+                    SymbolRefAttr::get(ctx, binding.channelName),
+                    builder.getI64IntegerAttr(binding.srcHartId),
+                    builder.getI64IntegerAttr(binding.dstHartId)
                 );
             }
 
@@ -2489,16 +2489,16 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
     builder.setInsertionPointAfter(run);
     // end of run region
 
-    // receive final output fragments from tiles and assemble them in L2
+    // receive final output bindings from tiles and assemble them in L2
     llvm::DenseMap<int64_t, Value> outputTensorValues = OutputTensorInitValues;
-    for (const TransitionFragment &fragment : outputFragments) {
-        auto *tensor = (*tensors)[fragment.tensorId].getAsObject();
+    for (const TileSourceChannelBinding &binding : outputBindings) {
+        auto *tensor = (*tensors)[binding.tensorId].getAsObject();
         SmallVector<int64_t> shape;
         SmallVector<OpFoldResult> offsets;
         SmallVector<OpFoldResult> sizes;
         SmallVector<OpFoldResult> strides;
 
-        for (const SliceDim &dim : fragment.dstDims) {
+        for (const SliceDim &dim : binding.dstDims) {
             shape.push_back(dim.length);
             offsets.push_back(builder.getIndexAttr(dim.start));
             sizes.push_back(builder.getIndexAttr(dim.length));
@@ -2512,12 +2512,12 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
             builder,
             loc,
             resultType,
-            StringRef(fragment.name),
-            fragment.srcHartId,
-            fragment.dstHartId
+            StringRef(binding.channelName),
+            binding.srcHartId,
+            binding.dstHartId
         ).getResult();
 
-        Value currentOutput = outputTensorValues.lookup(fragment.tensorId);
+        Value currentOutput = outputTensorValues.lookup(binding.tensorId);
         Value updatedOutput = tensor::InsertSliceOp::create(
             builder,
             loc,
@@ -2528,7 +2528,7 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
             strides,
             ArrayRef<NamedAttribute>{}
         ).getResult();
-        outputTensorValues[fragment.tensorId] = updatedOutput;
+        outputTensorValues[binding.tensorId] = updatedOutput;
     }
 
     // place main's return op at the end of the block
