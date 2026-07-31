@@ -35,23 +35,17 @@
       "is_initializer": false
     }
   ],
-  "initializations": [
+  "transitions": [
     {
-      "name": "init_x",
+      "kind": "INPUT",
       "tensor_id": 0,
-      "fragments": [
+      "destination_stage_id": 0,
+      "destination_input_index": 0,
+      "destinations": [
         {
-          "src_hartid": -1,
-          "dst_hartid": 0,
-          "src_slice": {
-            "dims": [
-              {"start": 0, "length": 1},
-              {"start": 0, "length": 1},
-              {"start": 0, "length": 4},
-              {"start": 0, "length": 4}
-            ]
-          },
-          "dst_slice": {
+          "tile_id": 0,
+          "tensor_slice": {
+            "rank": 4,
             "dims": [
               {"start": 0, "length": 1},
               {"start": 0, "length": 1},
@@ -63,40 +57,22 @@
       ]
     },
     {
-      "name": "init_w",
-      "tensor_id": 1,
-      "fragments": [
+      "kind": "OUTPUT",
+      "tensor_id": 3,
+      "source_stage_id": 0,
+      "source_output_index": 0,
+      "sources": [
         {
-          "src_hartid": -1,
-          "dst_hartid": 0,
-          "src_slice": {
+          "tile_id": 0,
+          "tensor_slice": {
+            "rank": 4,
             "dims": [
-              {"start": 0, "length": 2},
               {"start": 0, "length": 1},
-              {"start": 0, "length": 3},
-              {"start": 0, "length": 2}
-            ]
-          },
-          "dst_slice": {
-            "dims": [
               {"start": 0, "length": 2},
-              {"start": 0, "length": 1},
-              {"start": 0, "length": 3},
+              {"start": 0, "length": 2},
               {"start": 0, "length": 2}
             ]
           }
-        }
-      ]
-    },
-    {
-      "name": "init_b",
-      "tensor_id": 2,
-      "fragments": [
-        {
-          "src_hartid": -1,
-          "dst_hartid": 0,
-          "src_slice": {"dims": [{"start": 0, "length": 2}]},
-          "dst_slice": {"dims": [{"start": 0, "length": 2}]}
         }
       ]
     }
@@ -128,9 +104,45 @@
             "attributes": {}
           },
           "inputs": [
-            {"tensor_id": 0, "source": {"base_addr": 1}},
-            {"tensor_id": 1, "source": {"base_addr": 2}},
-            {"tensor_id": 2, "source": {"base_addr": 3}}
+            {
+              "tensor_id": 0,
+              "source": {"kind": "TRANSITION", "transition_id": 0}
+            },
+            {
+              "tensor_id": 1,
+              "source": {
+                "kind": "INITIALIZER",
+                "destinations": [
+                  {
+                    "tile_id": 0,
+                    "tensor_slice": {
+                      "rank": 4,
+                      "dims": [
+                        {"start": 0, "length": 2},
+                        {"start": 0, "length": 1},
+                        {"start": 0, "length": 3},
+                        {"start": 0, "length": 2}
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "tensor_id": 2,
+              "source": {
+                "kind": "INITIALIZER",
+                "destinations": [
+                  {
+                    "tile_id": 0,
+                    "tensor_slice": {
+                      "rank": 1,
+                      "dims": [{"start": 0, "length": 2}]
+                    }
+                  }
+                ]
+              }
+            }
           ],
           "outputs": [
             {
@@ -144,35 +156,6 @@
               }
             }
           ]
-        }
-      ]
-    }
-  ],
-  "transitions": [],
-  "finalizations": [
-    {
-      "name": "output_y",
-      "tensor_id": 3,
-      "fragments": [
-        {
-          "src_hartid": 0,
-          "dst_hartid": -1,
-          "src_slice": {
-            "dims": [
-              {"start": 0, "length": 1},
-              {"start": 0, "length": 2},
-              {"start": 0, "length": 2},
-              {"start": 0, "length": 2}
-            ]
-          },
-          "dst_slice": {
-            "dims": [
-              {"start": 0, "length": 1},
-              {"start": 0, "length": 2},
-              {"start": 0, "length": 2},
-              {"start": 0, "length": 2}
-            ]
-          }
         }
       ]
     }

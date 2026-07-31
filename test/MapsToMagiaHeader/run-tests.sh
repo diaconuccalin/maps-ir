@@ -7,6 +7,7 @@ fixture="${repo_root}/test/MapsToMagiaHeader/packed_weights.mlir"
 conv2d_fixture="${repo_root}/test/MapsToMagiaHeader/conv2d.json"
 descriptor_fixture="${repo_root}/test/MapsToMagiaHeader/descriptor_kernels.mlir"
 execution_plan_fixture="${repo_root}/test/MapsToMagiaHeader/execution_plan.json"
+planner_execution_plan_fixture="${repo_root}/examples/magia_example.execution-plan.json"
 sigmoid_fixture="${repo_root}/test/MapsToMagiaHeader/sigmoid.json"
 test_dir="$(mktemp -d)"
 trap 'rm -rf "${test_dir}"' EXIT
@@ -125,6 +126,14 @@ test "$(grep -c 'maps.send .*@transition_1_transfer_0' \
 grep -q '.kind = OP_ADD' "${test_dir}/execution_plan_generated.h"
 grep -q '.kind = OP_SIGMOID' "${test_dir}/execution_plan_generated.h"
 
+"${translator}" --json-to-maps "${planner_execution_plan_fixture}" \
+  -o "${test_dir}/planner_execution_plan.mlir"
+grep -q '@transition_0_destination_0' "${test_dir}/planner_execution_plan.mlir"
+grep -q '@transition_1_transfer_0' "${test_dir}/planner_execution_plan.mlir"
+grep -q '@transition_3_source_0' "${test_dir}/planner_execution_plan.mlir"
+grep -q '@initializer_stage_0_layer_0_input_1_destination_0' \
+  "${test_dir}/planner_execution_plan.mlir"
+
 package_dir="${test_dir}/package"
 source_weights="${test_dir}/source.weights.bin"
 printf 'MAPS' > "${source_weights}"
@@ -165,7 +174,7 @@ assert manifest["source_model"] == {
     }],
     "outputs": [{
         "id": 2,
-        "name": "output_y",
+        "name": "transition_1_source_0",
         "dtype": "float16",
         "shape": [2, 2],
         "encoding": "raw",
@@ -250,14 +259,14 @@ fi
 test ! -e "${test_dir}/wrong-checksum-package"
 
 make -C "${repo_root}" magia-header \
-  PIPELINE_JSON="${sigmoid_fixture}" \
-  PIPELINE_MLIR="${test_dir}/sigmoid.mlir" \
+  EXECUTION_PLAN_JSON="${sigmoid_fixture}" \
+  EXECUTION_PLAN_MLIR="${test_dir}/sigmoid.mlir" \
   MAGIA_HEADER="${test_dir}/sigmoid_make_generated.h" \
   OUTPUT_STEM=sigmoid >/dev/null
 grep -q '.kind = OP_SIGMOID' "${test_dir}/sigmoid_make_generated.h"
 
 if make -n -C "${repo_root}/.." magia-header | grep -q 'examples/magia_example.py'; then
-  echo "standalone magia-header must not replan pipeline JSON" >&2
+  echo "standalone magia-header must not replan Execution Plan JSON" >&2
   exit 1
 fi
 

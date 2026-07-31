@@ -1,0 +1,3076 @@
+{
+  "execution": {
+    "num_token_slots": 2
+  },
+  "mesh": {
+    "height": 4,
+    "l2_memory": {
+      "size": 1073741824
+    },
+    "tiles": [
+      {
+        "tile_id": 0,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "tile_id": 1,
+        "x": 1,
+        "y": 0
+      },
+      {
+        "tile_id": 2,
+        "x": 2,
+        "y": 0
+      },
+      {
+        "tile_id": 3,
+        "x": 3,
+        "y": 0
+      },
+      {
+        "tile_id": 4,
+        "x": 0,
+        "y": 1
+      },
+      {
+        "tile_id": 5,
+        "x": 1,
+        "y": 1
+      },
+      {
+        "tile_id": 6,
+        "x": 2,
+        "y": 1
+      },
+      {
+        "tile_id": 7,
+        "x": 3,
+        "y": 1
+      },
+      {
+        "tile_id": 8,
+        "x": 0,
+        "y": 2
+      },
+      {
+        "tile_id": 9,
+        "x": 1,
+        "y": 2
+      },
+      {
+        "tile_id": 10,
+        "x": 2,
+        "y": 2
+      },
+      {
+        "tile_id": 11,
+        "x": 3,
+        "y": 2
+      },
+      {
+        "tile_id": 12,
+        "x": 0,
+        "y": 3
+      },
+      {
+        "tile_id": 13,
+        "x": 1,
+        "y": 3
+      },
+      {
+        "tile_id": 14,
+        "x": 2,
+        "y": 3
+      },
+      {
+        "tile_id": 15,
+        "x": 3,
+        "y": 3
+      }
+    ],
+    "width": 4
+  },
+  "name": "simple_three_stage",
+  "stages": [
+    {
+      "layers": [
+        {
+          "inputs": [
+            {
+              "source": {
+                "kind": "TRANSITION",
+                "transition_id": 0
+              },
+              "tensor_id": 0
+            },
+            {
+              "source": {
+                "destinations": [
+                  {
+                    "tensor_slice": {
+                      "dims": [
+                        {
+                          "length": 64,
+                          "start": 0
+                        },
+                        {
+                          "length": 64,
+                          "start": 0
+                        }
+                      ],
+                      "rank": 2
+                    },
+                    "tile_id": 4
+                  },
+                  {
+                    "tensor_slice": {
+                      "dims": [
+                        {
+                          "length": 64,
+                          "start": 0
+                        },
+                        {
+                          "length": 64,
+                          "start": 0
+                        }
+                      ],
+                      "rank": 2
+                    },
+                    "tile_id": 8
+                  }
+                ],
+                "kind": "INITIALIZER"
+              },
+              "tensor_id": 4
+            }
+          ],
+          "node": {
+            "attributes": {},
+            "inputs": [
+              {
+                "dims": [
+                  64,
+                  64
+                ],
+                "dtype": "float16",
+                "elem_bytes": 2,
+                "name": "x",
+                "rank": 2
+              },
+              {
+                "dims": [
+                  64,
+                  64
+                ],
+                "dtype": "float16",
+                "elem_bytes": 2,
+                "name": "matmul_w",
+                "rank": 2
+              }
+            ],
+            "kind": 0,
+            "name": "matmul_0",
+            "outputs": [
+              {
+                "dims": [
+                  64,
+                  64
+                ],
+                "dtype": "float16",
+                "elem_bytes": 2,
+                "name": "matmul_out",
+                "rank": 2
+              }
+            ],
+            "payload": {
+              "output": {
+                "dims": [
+                  64,
+                  64
+                ],
+                "dtype": "float16",
+                "elem_bytes": 2,
+                "name": "matmul_out",
+                "rank": 2
+              },
+              "transpose_w": false,
+              "w": {
+                "dims": [
+                  64,
+                  64
+                ],
+                "dtype": "float16",
+                "elem_bytes": 2,
+                "name": "matmul_w",
+                "rank": 2
+              },
+              "x": {
+                "dims": [
+                  64,
+                  64
+                ],
+                "dtype": "float16",
+                "elem_bytes": 2,
+                "name": "x",
+                "rank": 2
+              },
+              "y": null
+            }
+          },
+          "outputs": [
+            {
+              "layout": {
+                "logical_height": 2,
+                "logical_width": 1,
+                "mesh_x": {
+                  "mode": 1,
+                  "tensor_axis": 1
+                },
+                "mesh_y": {
+                  "mode": 1,
+                  "tensor_axis": 0
+                },
+                "submesh": {
+                  "height": 1,
+                  "mesh": {
+                    "height": 4,
+                    "l2_memory": {
+                      "size": 1073741824
+                    },
+                    "tiles": [
+                      {
+                        "tile_id": 0,
+                        "x": 0,
+                        "y": 0
+                      },
+                      {
+                        "tile_id": 1,
+                        "x": 1,
+                        "y": 0
+                      },
+                      {
+                        "tile_id": 2,
+                        "x": 2,
+                        "y": 0
+                      },
+                      {
+                        "tile_id": 3,
+                        "x": 3,
+                        "y": 0
+                      },
+                      {
+                        "tile_id": 4,
+                        "x": 0,
+                        "y": 1
+                      },
+                      {
+                        "tile_id": 5,
+                        "x": 1,
+                        "y": 1
+                      },
+                      {
+                        "tile_id": 6,
+                        "x": 2,
+                        "y": 1
+                      },
+                      {
+                        "tile_id": 7,
+                        "x": 3,
+                        "y": 1
+                      },
+                      {
+                        "tile_id": 8,
+                        "x": 0,
+                        "y": 2
+                      },
+                      {
+                        "tile_id": 9,
+                        "x": 1,
+                        "y": 2
+                      },
+                      {
+                        "tile_id": 10,
+                        "x": 2,
+                        "y": 2
+                      },
+                      {
+                        "tile_id": 11,
+                        "x": 3,
+                        "y": 2
+                      },
+                      {
+                        "tile_id": 12,
+                        "x": 0,
+                        "y": 3
+                      },
+                      {
+                        "tile_id": 13,
+                        "x": 1,
+                        "y": 3
+                      },
+                      {
+                        "tile_id": 14,
+                        "x": 2,
+                        "y": 3
+                      },
+                      {
+                        "tile_id": 15,
+                        "x": 3,
+                        "y": 3
+                      }
+                    ],
+                    "width": 4
+                  },
+                  "submesh_id": 0,
+                  "tile_ids": [
+                    0,
+                    1
+                  ],
+                  "width": 2
+                }
+              },
+              "tensor_id": 2
+            }
+          ]
+        }
+      ],
+      "name": "matmul_0",
+      "submesh": {
+        "submesh_id": 0,
+        "tile_ids": [
+          4,
+          8
+        ]
+      },
+      "virtual_to_physical": {
+        "0": 4,
+        "1": 8
+      }
+    },
+    {
+      "layers": [
+        {
+          "inputs": [
+            {
+              "source": {
+                "kind": "TRANSITION",
+                "transition_id": 1
+              },
+              "tensor_id": 2
+            }
+          ],
+          "node": {
+            "attributes": {},
+            "inputs": [
+              {
+                "dims": [
+                  64,
+                  64
+                ],
+                "dtype": "float16",
+                "elem_bytes": 2,
+                "name": "matmul_out",
+                "rank": 2
+              }
+            ],
+            "kind": 1,
+            "name": "log_0",
+            "outputs": [
+              {
+                "dims": [
+                  64,
+                  64
+                ],
+                "dtype": "float16",
+                "elem_bytes": 2,
+                "name": "log_out",
+                "rank": 2
+              }
+            ],
+            "payload": {
+              "op_name": "Log",
+              "output": {
+                "dims": [
+                  64,
+                  64
+                ],
+                "dtype": "float16",
+                "elem_bytes": 2,
+                "name": "log_out",
+                "rank": 2
+              },
+              "work_kind": "LOG",
+              "x": {
+                "dims": [
+                  64,
+                  64
+                ],
+                "dtype": "float16",
+                "elem_bytes": 2,
+                "name": "matmul_out",
+                "rank": 2
+              }
+            }
+          },
+          "outputs": [
+            {
+              "layout": {
+                "logical_height": 1,
+                "logical_width": 13,
+                "mesh_x": {
+                  "mode": 1,
+                  "tensor_axis": 1
+                },
+                "mesh_y": {
+                  "mode": 1,
+                  "tensor_axis": 0
+                },
+                "submesh": {
+                  "height": 1,
+                  "mesh": {
+                    "height": 4,
+                    "l2_memory": {
+                      "size": 1073741824
+                    },
+                    "tiles": [
+                      {
+                        "tile_id": 0,
+                        "x": 0,
+                        "y": 0
+                      },
+                      {
+                        "tile_id": 1,
+                        "x": 1,
+                        "y": 0
+                      },
+                      {
+                        "tile_id": 2,
+                        "x": 2,
+                        "y": 0
+                      },
+                      {
+                        "tile_id": 3,
+                        "x": 3,
+                        "y": 0
+                      },
+                      {
+                        "tile_id": 4,
+                        "x": 0,
+                        "y": 1
+                      },
+                      {
+                        "tile_id": 5,
+                        "x": 1,
+                        "y": 1
+                      },
+                      {
+                        "tile_id": 6,
+                        "x": 2,
+                        "y": 1
+                      },
+                      {
+                        "tile_id": 7,
+                        "x": 3,
+                        "y": 1
+                      },
+                      {
+                        "tile_id": 8,
+                        "x": 0,
+                        "y": 2
+                      },
+                      {
+                        "tile_id": 9,
+                        "x": 1,
+                        "y": 2
+                      },
+                      {
+                        "tile_id": 10,
+                        "x": 2,
+                        "y": 2
+                      },
+                      {
+                        "tile_id": 11,
+                        "x": 3,
+                        "y": 2
+                      },
+                      {
+                        "tile_id": 12,
+                        "x": 0,
+                        "y": 3
+                      },
+                      {
+                        "tile_id": 13,
+                        "x": 1,
+                        "y": 3
+                      },
+                      {
+                        "tile_id": 14,
+                        "x": 2,
+                        "y": 3
+                      },
+                      {
+                        "tile_id": 15,
+                        "x": 3,
+                        "y": 3
+                      }
+                    ],
+                    "width": 4
+                  },
+                  "submesh_id": 1,
+                  "tile_ids": [
+                    0,
+                    1,
+                    2,
+                    3,
+                    4,
+                    5,
+                    6,
+                    7,
+                    8,
+                    9,
+                    10,
+                    11,
+                    12
+                  ],
+                  "width": 13
+                }
+              },
+              "tensor_id": 3
+            }
+          ]
+        }
+      ],
+      "name": "log_0",
+      "submesh": {
+        "submesh_id": 1,
+        "tile_ids": [
+          0,
+          1,
+          2,
+          3,
+          5,
+          6,
+          7,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14
+        ]
+      },
+      "virtual_to_physical": {
+        "0": 10,
+        "1": 9,
+        "10": 1,
+        "11": 3,
+        "12": 0,
+        "2": 11,
+        "3": 14,
+        "4": 13,
+        "5": 12,
+        "6": 6,
+        "7": 5,
+        "8": 7,
+        "9": 2
+      }
+    },
+    {
+      "layers": [
+        {
+          "inputs": [
+            {
+              "source": {
+                "kind": "TRANSITION",
+                "transition_id": 2
+              },
+              "tensor_id": 3
+            },
+            {
+              "source": {
+                "destinations": [
+                  {
+                    "tensor_slice": {
+                      "dims": [
+                        {
+                          "length": 64,
+                          "start": 0
+                        },
+                        {
+                          "length": 64,
+                          "start": 0
+                        }
+                      ],
+                      "rank": 2
+                    },
+                    "tile_id": 15
+                  }
+                ],
+                "kind": "INITIALIZER"
+              },
+              "tensor_id": 5
+            }
+          ],
+          "node": {
+            "attributes": {},
+            "inputs": [
+              {
+                "dims": [
+                  64,
+                  64
+                ],
+                "dtype": "float16",
+                "elem_bytes": 2,
+                "name": "log_out",
+                "rank": 2
+              },
+              {
+                "dims": [
+                  64,
+                  64
+                ],
+                "dtype": "float16",
+                "elem_bytes": 2,
+                "name": "add_bias",
+                "rank": 2
+              }
+            ],
+            "kind": 1,
+            "name": "add_0",
+            "outputs": [
+              {
+                "dims": [
+                  64,
+                  64
+                ],
+                "dtype": "float16",
+                "elem_bytes": 2,
+                "name": "add_out",
+                "rank": 2
+              }
+            ],
+            "payload": {
+              "lhs": {
+                "dims": [
+                  64,
+                  64
+                ],
+                "dtype": "float16",
+                "elem_bytes": 2,
+                "name": "log_out",
+                "rank": 2
+              },
+              "op_name": "Add",
+              "output": {
+                "dims": [
+                  64,
+                  64
+                ],
+                "dtype": "float16",
+                "elem_bytes": 2,
+                "name": "add_out",
+                "rank": 2
+              },
+              "rhs": {
+                "dims": [
+                  64,
+                  64
+                ],
+                "dtype": "float16",
+                "elem_bytes": 2,
+                "name": "add_bias",
+                "rank": 2
+              },
+              "work_kind": "ADD"
+            }
+          },
+          "outputs": [
+            {
+              "layout": {
+                "logical_height": 1,
+                "logical_width": 1,
+                "mesh_x": {
+                  "mode": 1,
+                  "tensor_axis": 1
+                },
+                "mesh_y": {
+                  "mode": 1,
+                  "tensor_axis": 0
+                },
+                "submesh": {
+                  "height": 1,
+                  "mesh": {
+                    "height": 4,
+                    "l2_memory": {
+                      "size": 1073741824
+                    },
+                    "tiles": [
+                      {
+                        "tile_id": 0,
+                        "x": 0,
+                        "y": 0
+                      },
+                      {
+                        "tile_id": 1,
+                        "x": 1,
+                        "y": 0
+                      },
+                      {
+                        "tile_id": 2,
+                        "x": 2,
+                        "y": 0
+                      },
+                      {
+                        "tile_id": 3,
+                        "x": 3,
+                        "y": 0
+                      },
+                      {
+                        "tile_id": 4,
+                        "x": 0,
+                        "y": 1
+                      },
+                      {
+                        "tile_id": 5,
+                        "x": 1,
+                        "y": 1
+                      },
+                      {
+                        "tile_id": 6,
+                        "x": 2,
+                        "y": 1
+                      },
+                      {
+                        "tile_id": 7,
+                        "x": 3,
+                        "y": 1
+                      },
+                      {
+                        "tile_id": 8,
+                        "x": 0,
+                        "y": 2
+                      },
+                      {
+                        "tile_id": 9,
+                        "x": 1,
+                        "y": 2
+                      },
+                      {
+                        "tile_id": 10,
+                        "x": 2,
+                        "y": 2
+                      },
+                      {
+                        "tile_id": 11,
+                        "x": 3,
+                        "y": 2
+                      },
+                      {
+                        "tile_id": 12,
+                        "x": 0,
+                        "y": 3
+                      },
+                      {
+                        "tile_id": 13,
+                        "x": 1,
+                        "y": 3
+                      },
+                      {
+                        "tile_id": 14,
+                        "x": 2,
+                        "y": 3
+                      },
+                      {
+                        "tile_id": 15,
+                        "x": 3,
+                        "y": 3
+                      }
+                    ],
+                    "width": 4
+                  },
+                  "submesh_id": 2,
+                  "tile_ids": [
+                    0
+                  ],
+                  "width": 1
+                }
+              },
+              "tensor_id": 1
+            }
+          ]
+        }
+      ],
+      "name": "add_0",
+      "submesh": {
+        "submesh_id": 2,
+        "tile_ids": [
+          15
+        ]
+      },
+      "virtual_to_physical": {
+        "0": 15
+      }
+    }
+  ],
+  "tensors": [
+    {
+      "dims": [
+        64,
+        64
+      ],
+      "dtype": "float16",
+      "elem_bytes": 2,
+      "is_initializer": false,
+      "name": "x",
+      "rank": 2
+    },
+    {
+      "dims": [
+        64,
+        64
+      ],
+      "dtype": "float16",
+      "elem_bytes": 2,
+      "is_initializer": false,
+      "name": "add_out",
+      "rank": 2
+    },
+    {
+      "dims": [
+        64,
+        64
+      ],
+      "dtype": "float16",
+      "elem_bytes": 2,
+      "is_initializer": false,
+      "name": "matmul_out",
+      "rank": 2
+    },
+    {
+      "dims": [
+        64,
+        64
+      ],
+      "dtype": "float16",
+      "elem_bytes": 2,
+      "is_initializer": false,
+      "name": "log_out",
+      "rank": 2
+    },
+    {
+      "dims": [
+        64,
+        64
+      ],
+      "dtype": "float16",
+      "elem_bytes": 2,
+      "is_initializer": true,
+      "name": "matmul_w",
+      "rank": 2
+    },
+    {
+      "dims": [
+        64,
+        64
+      ],
+      "dtype": "float16",
+      "elem_bytes": 2,
+      "is_initializer": true,
+      "name": "add_bias",
+      "rank": 2
+    }
+  ],
+  "transitions": [
+    {
+      "destination_input_index": 0,
+      "destination_stage_id": 0,
+      "destinations": [
+        {
+          "tensor_slice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 64,
+                "start": 0
+              }
+            ],
+            "rank": 2
+          },
+          "tile_id": 4
+        },
+        {
+          "tensor_slice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 32
+              },
+              {
+                "length": 64,
+                "start": 0
+              }
+            ],
+            "rank": 2
+          },
+          "tile_id": 8
+        }
+      ],
+      "kind": "INPUT",
+      "tensor_id": 0
+    },
+    {
+      "destination_input_index": 0,
+      "destination_stage_id": 1,
+      "kind": "INTERMEDIATE",
+      "source_output_index": 0,
+      "source_stage_id": 0,
+      "tensor_id": 2,
+      "transfers": [
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 10,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 4
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 5
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 9,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 5
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 4
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 10
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 11,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 10
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 4
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 15
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 14,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 15
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 4
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 20
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 13,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 20
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 4
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 25
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 12,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 25
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 4
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 30
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 6,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 30
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 4
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 35
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 5,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 35
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 4
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 40
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 7,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 40
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 4
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 45
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 2,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 45
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 4
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 50
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 1,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 50
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 4
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 55
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 3,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 55
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 4
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 4,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 4,
+                  "start": 60
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 0,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 4,
+                "start": 60
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 4
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 32
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 10,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 32
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 8
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 32
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 5
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 9,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 5
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 32
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 8
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 32
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 10
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 11,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 10
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 32
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 8
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 32
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 15
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 14,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 15
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 32
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 8
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 32
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 20
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 13,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 20
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 32
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 8
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 32
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 25
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 12,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 25
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 32
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 8
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 32
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 30
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 6,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 30
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 32
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 8
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 32
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 35
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 5,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 35
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 32
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 8
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 32
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 40
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 7,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 40
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 32
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 8
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 32
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 45
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 2,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 45
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 32
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 8
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 32
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 50
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 1,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 50
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 32
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 8
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 32
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 55
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 3,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 55
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 32
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 8
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 32
+              },
+              {
+                "length": 4,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 4,
+                  "start": 60
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 0,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 32,
+                "start": 0
+              },
+              {
+                "length": 4,
+                "start": 60
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 32,
+                  "start": 32
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 8
+        }
+      ]
+    },
+    {
+      "destination_input_index": 0,
+      "destination_stage_id": 2,
+      "kind": "INTERMEDIATE",
+      "source_output_index": 0,
+      "source_stage_id": 1,
+      "tensor_id": 3,
+      "transfers": [
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 15,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 10
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 5
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 15,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 5
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 9
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 10
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 15,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 10
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 11
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 15
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 15,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 15
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 14
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 20
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 15,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 20
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 13
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 25
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 15,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 25
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 12
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 30
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 15,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 30
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 6
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 35
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 15,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 35
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 5
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 40
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 15,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 40
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 7
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 45
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 15,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 45
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 2
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 50
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 15,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 50
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 1
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 55
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 15,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 5,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 5,
+                  "start": 55
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 3
+        },
+        {
+          "destination_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 4,
+                "start": 60
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 64,
+                  "start": 0
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "destination_tile_id": 15,
+          "source_subslice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 4,
+                "start": 0
+              }
+            ],
+            "parent": {
+              "dims": [
+                {
+                  "length": 64,
+                  "start": 0
+                },
+                {
+                  "length": 4,
+                  "start": 60
+                }
+              ],
+              "rank": 2
+            }
+          },
+          "source_tile_id": 0
+        }
+      ]
+    },
+    {
+      "kind": "OUTPUT",
+      "source_output_index": 0,
+      "source_stage_id": 2,
+      "sources": [
+        {
+          "tensor_slice": {
+            "dims": [
+              {
+                "length": 64,
+                "start": 0
+              },
+              {
+                "length": 64,
+                "start": 0
+              }
+            ],
+            "rank": 2
+          },
+          "tile_id": 15
+        }
+      ],
+      "tensor_id": 1
+    }
+  ]
+}

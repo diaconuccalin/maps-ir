@@ -31,21 +31,35 @@
       "is_initializer": false
     }
   ],
-  "initializations": [
+  "transitions": [
     {
-      "name": "init_x",
+      "kind": "INPUT",
       "tensor_id": 0,
-      "fragments": [
+      "destination_stage_id": 0,
+      "destination_input_index": 0,
+      "destinations": [
         {
-          "src_hartid": -1,
-          "dst_hartid": 0,
-          "src_slice": {
+          "tile_id": 0,
+          "tensor_slice": {
+            "rank": 2,
             "dims": [
               {"start": 0, "length": 2},
               {"start": 0, "length": 2}
             ]
-          },
-          "dst_slice": {
+          }
+        }
+      ]
+    },
+    {
+      "kind": "OUTPUT",
+      "tensor_id": 1,
+      "source_stage_id": 0,
+      "source_output_index": 0,
+      "sources": [
+        {
+          "tile_id": 0,
+          "tensor_slice": {
+            "rank": 2,
             "dims": [
               {"start": 0, "length": 2},
               {"start": 0, "length": 2}
@@ -78,7 +92,10 @@
             "attributes": {}
           },
           "inputs": [
-            {"tensor_id": 0, "source": {"base_addr": 1}}
+            {
+              "tensor_id": 0,
+              "source": {"kind": "TRANSITION", "transition_id": 0}
+            }
           ],
           "outputs": [
             {
@@ -92,31 +109,6 @@
               }
             }
           ]
-        }
-      ]
-    }
-  ],
-  "transitions": [],
-  "finalizations": [
-    {
-      "name": "output_y",
-      "tensor_id": 1,
-      "fragments": [
-        {
-          "src_hartid": 0,
-          "dst_hartid": -1,
-          "src_slice": {
-            "dims": [
-              {"start": 0, "length": 2},
-              {"start": 0, "length": 2}
-            ]
-          },
-          "dst_slice": {
-            "dims": [
-              {"start": 0, "length": 2},
-              {"start": 0, "length": 2}
-            ]
-          }
         }
       ]
     }
