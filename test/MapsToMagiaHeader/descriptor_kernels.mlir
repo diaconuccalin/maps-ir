@@ -58,8 +58,8 @@ module attributes {
           %15 = "maps.kernel"(%14) <{kind = "SQRT", params = array<i64>}> : (tensor<1x2x3x4x5x6xf16>) -> tensor<1x2x3x4x5x6xf16>
           %16 = "maps.kernel"(%15, %15) <{kind = "SUB", params = array<i64>}> : (tensor<1x2x3x4x5x6xf16>, tensor<1x2x3x4x5x6xf16>) -> tensor<1x2x3x4x5x6xf16>
           %17 = "maps.kernel"(%16) <{kind = "TRANSPOSE", params = array<i64: 1, 0>}> : (tensor<1x2x3x4x5x6xf16>) -> tensor<1x2x3x4x5x6xf16>
-          %18 = "maps.kernel"(%17) <{kind = "AllReduceMax", params = array<i64: 0>}> : (tensor<1x2x3x4x5x6xf16>) -> tensor<1x2x3x4x5x6xf16>
-          %19 = "maps.kernel"(%18) <{kind = "AllReduceSum", params = array<i64: 1>}> : (tensor<1x2x3x4x5x6xf16>) -> tensor<1x2x3x4x5x6xf16>
+          %18 = "maps.kernel"(%17) <{collective_group_id = 0 : i64, collective_layer_index = 18 : i64, collective_participants = array<i64: 0>, collective_stage_id = 0 : i64, kind = "AllReduceMax", params = array<i64>}> : (tensor<1x2x3x4x5x6xf16>) -> tensor<1x2x3x4x5x6xf16>
+          %19 = "maps.kernel"(%18) <{collective_group_id = 0 : i64, collective_layer_index = 19 : i64, collective_participants = array<i64: 0>, collective_stage_id = 0 : i64, kind = "AllReduceSum", params = array<i64>}> : (tensor<1x2x3x4x5x6xf16>) -> tensor<1x2x3x4x5x6xf16>
           %20 = "maps.kernel"(%19, %19) <{kind = "MATMUL", params = array<i64: 2, 2, 2, 1>}> : (tensor<1x2x3x4x5x6xf16>, tensor<1x2x3x4x5x6xf16>) -> tensor<1x2x3x4x5x6xf16>
         }
       }

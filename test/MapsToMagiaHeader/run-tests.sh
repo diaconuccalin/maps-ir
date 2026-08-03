@@ -14,6 +14,39 @@ trap 'rm -rf "${test_dir}"' EXIT
 
 cmake --build "${repo_root}/build" --target maps-translate -j2 >/dev/null
 
+collective_plan="${test_dir}/collective.execution-plan.json"
+"${repo_root}/../.venv/bin/python" -c \
+  'from pathlib import Path; import sys; from examples.magia_collective_example import write_collective_bundle; write_collective_bundle(Path(sys.argv[1]))' \
+  "${collective_plan}"
+"${translator}" --json-to-maps "${collective_plan}" \
+  -o "${test_dir}/collective.mlir"
+"${translator}" --maps-to-magia-header --maps-magia-output-stem=collective \
+  "${test_dir}/collective.mlir" -o "${test_dir}/collective.h"
+grep -q 'collective_participants = array<i64: 0, 1>' \
+  "${test_dir}/collective.mlir"
+grep -q 'collective_participants = array<i64: 2, 3>' \
+  "${test_dir}/collective.mlir"
+test "$(grep -c '.num_participants = 2u' "${test_dir}/collective.h")" -eq 8
+grep -q '.group_id = 0u' "${test_dir}/collective.h"
+grep -q '.group_id = 1u' "${test_dir}/collective.h"
+! grep -q 'collective_axis' "${test_dir}/collective.mlir"
+grep -q '#include "utils/maps_operations.h"' "${test_dir}/collective.h"
+! grep -q 'maps_generated_execute_op' "${test_dir}/collective.h"
+grep -q '.operation_runtime = runtime' "${test_dir}/collective.h"
+
+mkdir "${test_dir}/second"
+second_collective_plan="${test_dir}/second/collective.execution-plan.json"
+"${repo_root}/../.venv/bin/python" -c \
+  'from pathlib import Path; import sys; from examples.magia_collective_example import write_collective_bundle; write_collective_bundle(Path(sys.argv[1]))' \
+  "${second_collective_plan}"
+cmp "${collective_plan}" "${second_collective_plan}"
+"${translator}" --json-to-maps "${second_collective_plan}" \
+  -o "${test_dir}/second/collective.mlir"
+"${translator}" --maps-to-magia-header --maps-magia-output-stem=collective \
+  "${test_dir}/second/collective.mlir" \
+  -o "${test_dir}/second/collective.h"
+cmp "${test_dir}/collective.h" "${test_dir}/second/collective.h"
+
 "${translator}" --maps-to-magia-header --maps-magia-output-stem=tiny \
   "${fixture}" -o "${test_dir}/tiny_generated.h"
 "${translator}" --maps-to-magia-data --maps-magia-output-stem=tiny \
@@ -54,10 +87,7 @@ grep -q 'MAPS_GENERATED_NUM_TOKEN_SLOTS 3u' "${test_dir}/conv2d_generated.h"
 grep -q 'MAPS_NUM_TOKEN_SLOTS disagrees with the planned execution contract' \
   "${test_dir}/conv2d_generated.h"
 grep -q '.kind = OP_CONV2D' "${test_dir}/conv2d_generated.h"
-grep -q 'op->outputs\[0\].elem_type != ELEM_F16' \
-  "${test_dir}/conv2d_generated.h"
-grep -q 'op->outputs\[0\].elem_type == ELEM_F16' \
-  "${test_dir}/conv2d_generated.h"
+! grep -q 'maps_generated_execute_op' "${test_dir}/conv2d_generated.h"
 grep -q '.params = {2u, 2u, 1u, 2u, 1u, 1u, 0u, 0u}' \
   "${test_dir}/conv2d_generated.h"
 
@@ -93,6 +123,14 @@ grep -q '.shape = {1, 2, 3, 4, 5, 6}' \
 grep -q '.strides_bytes = {1440, 720, 240, 60, 12, 2}' \
   "${test_dir}/descriptor_kernels.h"
 grep -q '.dims = {{0u, 1u, 1440u}, {0u, 2u, 720u}, {0u, 3u, 240u}, {0u, 4u, 60u}, {0u, 5u, 12u}, {0u, 6u, 2u}}' \
+  "${test_dir}/descriptor_kernels.h"
+grep -q '.collective = {.stage_id = 0u, .layer_index = 18u, .group_id = 0u' \
+  "${test_dir}/descriptor_kernels.h"
+grep -q '.collective = {.stage_id = 0u, .layer_index = 19u, .group_id = 0u' \
+  "${test_dir}/descriptor_kernels.h"
+test "$(grep -c '.num_participants = 1u' \
+  "${test_dir}/descriptor_kernels.h")" -eq 2
+grep -q '.participants = {{.hartid = 0u' \
   "${test_dir}/descriptor_kernels.h"
 
 "${translator}" --json-to-maps "${sigmoid_fixture}" \

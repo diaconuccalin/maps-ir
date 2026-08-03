@@ -223,7 +223,11 @@ def KernelOp : Maps_Op<"kernel"> {
   let arguments = (ins
     Variadic<AnyRankedTensor>:$inputs,
     StrAttr:$kind,
-    DenseI64ArrayAttr:$params
+    DenseI64ArrayAttr:$params,
+    OptionalAttr<I64Attr>:$collective_stage_id,
+    OptionalAttr<I64Attr>:$collective_layer_index,
+    OptionalAttr<I64Attr>:$collective_group_id,
+    OptionalAttr<DenseI64ArrayAttr>:$collective_participants
   );
 
   let results = (outs

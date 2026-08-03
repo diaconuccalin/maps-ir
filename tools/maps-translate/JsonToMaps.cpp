@@ -834,11 +834,6 @@ getDescriptorKernelParams(StringRef kind, const llvm::json::Object &payload) {
         if (!offsets || offsets->size() > 8)
             return std::nullopt;
         params.append(*offsets);
-    } else if (kind == "AllReduceSum" || kind == "AllReduceMax") {
-        auto axis = payload.getString("collective_axis");
-        if (!axis || (*axis != "x" && *axis != "y"))
-            return std::nullopt;
-        params.push_back(*axis == "x" ? 0 : 1);
     }
 
     return params;
@@ -846,6 +841,7 @@ getDescriptorKernelParams(StringRef kind, const llvm::json::Object &payload) {
 
 static FailureOr<Value> emitDescriptorKernel(
     Location loc, const llvm::json::Object &node,
+    const llvm::json::Object &layer, unsigned layerIndex,
     const llvm::json::Array &inputs, const llvm::json::Object &output,
     const Tile &tile, const Stage &stage, OpBuilder &builder,
     llvm::DenseMap<int64_t, Value> &tileValues) {
@@ -898,6 +894,47 @@ static FailureOr<Value> emitDescriptorKernel(
     state.addTypes(*outputType);
     state.addAttribute("kind", builder.getStringAttr(*kind));
     state.addAttribute("params", builder.getDenseI64ArrayAttr(*params));
+    if (*kind == "AllReduceSum" || *kind == "AllReduceMax") {
+        auto *groups = layer.getArray("collective_groups");
+        if (!groups)
+            return failure();
+
+        bool foundGroup = false;
+        for (auto groupEntry : llvm::enumerate(*groups)) {
+            auto *group = groupEntry.value().getAsObject();
+            auto *tileIds = group ? group->getArray("tile_ids") : nullptr;
+            if (!tileIds)
+                return failure();
+
+            SmallVector<int64_t> participants;
+            bool tileParticipates = false;
+            for (const llvm::json::Value &tileIdValue : *tileIds) {
+                auto tileId = tileIdValue.getAsInteger();
+                if (!tileId)
+                    return failure();
+                participants.push_back(*tileId);
+                tileParticipates |= *tileId == tile.hartId;
+            }
+            if (!tileParticipates)
+                continue;
+            if (foundGroup || participants.empty())
+                return failure();
+
+            foundGroup = true;
+            state.addAttribute("collective_stage_id",
+                               builder.getI64IntegerAttr(stage.stageId));
+            state.addAttribute("collective_layer_index",
+                               builder.getI64IntegerAttr(layerIndex));
+            state.addAttribute(
+                "collective_group_id",
+                builder.getI64IntegerAttr(groupEntry.index()));
+            state.addAttribute(
+                "collective_participants",
+                builder.getDenseI64ArrayAttr(participants));
+        }
+        if (!foundGroup)
+            return failure();
+    }
     return builder.create(state)->getResult(0);
 }
 
@@ -1945,7 +1982,8 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                         auto *output = (*outputs)[0].getAsObject();
                         auto kernel = output
                             ? emitDescriptorKernel(
-                                  loc, *node, *inputs, *output, tileObj,
+                                  loc, *node, *layer, layerEntry.index(),
+                                  *inputs, *output, tileObj,
                                   stageObj, builder, tileValues)
                             : FailureOr<Value>(failure());
                         if (failed(kernel)) {
@@ -2023,7 +2061,8 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                          *workKind == "TRANSPOSE")) {
                         auto kernel = output
                             ? emitDescriptorKernel(
-                                  loc, *node, *inputs, *output, tileObj,
+                                  loc, *node, *layer, layerEntry.index(),
+                                  *inputs, *output, tileObj,
                                   stageObj, builder, tileValues)
                             : FailureOr<Value>(failure());
                         if (failed(kernel)) {
@@ -2090,7 +2129,8 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                     if (workKind == "DEPTHWISE_CONV") {
                         auto kernel = output
                             ? emitDescriptorKernel(
-                                  loc, *node, *inputs, *output, tileObj,
+                                  loc, *node, *layer, layerEntry.index(),
+                                  *inputs, *output, tileObj,
                                   stageObj, builder, tileValues)
                             : FailureOr<Value>(failure());
                         if (failed(kernel)) {
@@ -2220,8 +2260,8 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                     auto *output = (*outputs)[0].getAsObject();
                     auto kernel = output
                         ? emitDescriptorKernel(
-                              loc, *node, *inputs, *output, tileObj, stageObj,
-                              builder, tileValues)
+                              loc, *node, *layer, layerEntry.index(), *inputs,
+                              *output, tileObj, stageObj, builder, tileValues)
                         : FailureOr<Value>(failure());
                     if (failed(kernel)) {
                         llvm::errs() << "unsupported MAPS descriptor node kind "
@@ -2245,8 +2285,8 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                     auto *output = (*outputs)[0].getAsObject();
                     auto kernel = output
                         ? emitDescriptorKernel(
-                              loc, *node, *inputs, *output, tileObj, stageObj,
-                              builder, tileValues)
+                              loc, *node, *layer, layerEntry.index(), *inputs,
+                              *output, tileObj, stageObj, builder, tileValues)
                         : FailureOr<Value>(failure());
                     if (succeeded(kernel)) {
                         tileValues[*outputTensorId] = *kernel;

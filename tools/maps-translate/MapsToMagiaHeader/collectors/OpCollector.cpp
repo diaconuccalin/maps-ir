@@ -7,6 +7,7 @@
 #include "llvm/ADT/Twine.h"
 
 #include <optional>
+#include <set>
 
 namespace mlir::maps {
 
@@ -85,6 +86,38 @@ static void fillElementwiseParams(GeneratedOp &generatedOp,
   generatedOp.params[2] = static_cast<uint32_t>(product(shape));
 }
 
+static LogicalResult fillCollectiveDescriptor(Operation *op,
+                                              int64_t tileId,
+                                              GeneratedOp &generatedOp) {
+  auto stageId = op->getAttrOfType<IntegerAttr>("collective_stage_id");
+  auto layerIndex = op->getAttrOfType<IntegerAttr>("collective_layer_index");
+  auto groupId = op->getAttrOfType<IntegerAttr>("collective_group_id");
+  auto participants =
+      op->getAttrOfType<DenseI64ArrayAttr>("collective_participants");
+  if (!stageId || !layerIndex || !groupId || !participants ||
+      stageId.getInt() < 0 || layerIndex.getInt() < 0 || groupId.getInt() < 0)
+    return failure();
+
+  std::set<int64_t> uniqueParticipants;
+  for (int64_t participant : participants.asArrayRef()) {
+    if (participant < 0 || !uniqueParticipants.insert(participant).second)
+      return failure();
+    generatedOp.collectiveParticipants.push_back(
+        static_cast<unsigned>(participant));
+  }
+  if (generatedOp.collectiveParticipants.empty() ||
+      uniqueParticipants.find(tileId) == uniqueParticipants.end())
+    return failure();
+
+  generatedOp.isCollective = true;
+  generatedOp.collectiveIdentity = {
+      static_cast<unsigned>(stageId.getInt()),
+      static_cast<unsigned>(layerIndex.getInt()),
+      static_cast<unsigned>(groupId.getInt()),
+  };
+  return success();
+}
+
 LogicalResult collectComputeOp(Operation *op, RunCollectionState &state,
                                MagiaHeaderModel &model) {
   StringRef name = op->getName().getStringRef();
@@ -111,6 +144,7 @@ LogicalResult collectComputeOp(Operation *op, RunCollectionState &state,
     return failure();
 
   GeneratedOp generatedOp;
+  generatedOp.ownerHartid = tileId.getInt();
   if (isKernel) {
     auto kind = op->getAttrOfType<StringAttr>("kind");
     auto params = op->getAttrOfType<DenseI64ArrayAttr>("params");
@@ -121,6 +155,10 @@ LogicalResult collectComputeOp(Operation *op, RunCollectionState &state,
     for (auto indexed : llvm::enumerate(params.asArrayRef()))
       generatedOp.params[indexed.index()] =
           static_cast<uint32_t>(indexed.value());
+    if ((*generatedKind == GeneratedOpKind::AllReduceMax ||
+         *generatedKind == GeneratedOpKind::AllReduceSum) &&
+        failed(fillCollectiveDescriptor(op, tileId.getInt(), generatedOp)))
+      return failure();
   } else if (isConv2D) {
     generatedOp.kind = GeneratedOpKind::Conv2D;
     if (op->getNumOperands() < 2 || op->getNumOperands() > 3)

@@ -5,20 +5,17 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <map>
+#include <tuple>
 
 namespace mlir::maps {
 
 static void emitGeneratedPrelude(const MagiaHeaderModel &model,
                                  llvm::raw_ostream &os) {
   os << "#include <stdint.h>\n\n";
-  os << "#include \"eventunit.h\"\n";
-  os << "#include \"redmule.h\"\n";
   os << "#include \"tile.h\"\n";
+  os << "#include \"utils/maps_operations.h\"\n";
   os << "#include \"utils/maps_utils_v2.h\"\n\n";
-  os << "#include \"add.h\"\n";
-  os << "#include \"conv2d.h\"\n";
-  os << "#include \"log.h\"\n";
-  os << "#include \"redmule_kernels.h\"\n\n";
   os << "#define MAPS_GENERATED_NUM_TOKENS "
      << model.numTokens << "u\n";
   os << "#define MAPS_GENERATED_NUM_TOKEN_SLOTS "
@@ -39,10 +36,6 @@ static void emitGeneratedPrelude(const MagiaHeaderModel &model,
   os << "#else\n";
   os << "#define MAPS_NUM_TOKEN_SLOTS MAPS_GENERATED_NUM_TOKEN_SLOTS\n";
   os << "#endif\n\n";
-  os << "typedef struct {\n";
-  os << "  redmule_controller_t *redmule_ctrl;\n";
-  os << "  eu_controller_t *eu_ctrl;\n";
-  os << "} maps_generated_runtime_t;\n\n";
 }
 
 static std::string getL2GlobalSymbol(const GeneratedL2Global &global) {
@@ -362,6 +355,60 @@ static void emitSubsliceArray(const MagiaHeaderModel &model,
   os << "}";
 }
 
+using CollectiveKey = std::tuple<unsigned, unsigned, unsigned>;
+
+static CollectiveKey getCollectiveKey(const GeneratedOp &op) {
+  return {op.collectiveIdentity.stageId, op.collectiveIdentity.layerIndex,
+          op.collectiveIdentity.groupId};
+}
+
+static unsigned getCollectiveFlagBase(const MagiaHeaderModel &model,
+                                      const GeneratedOp &target) {
+  std::map<CollectiveKey, const GeneratedOp *> collectives;
+  for (const GeneratedOp &op : model.ops)
+    if (op.isCollective)
+      collectives.try_emplace(getCollectiveKey(op), &op);
+
+  unsigned flagBase = 0;
+  for (const auto &[key, op] : collectives) {
+    if (key == getCollectiveKey(target))
+      return flagBase;
+    flagBase += 2 * model.numTokenSlots * op->collectiveParticipants.size();
+  }
+  llvm_unreachable("collective operation has no stable flag allocation");
+}
+
+static const GeneratedOp &getParticipantCollectiveOp(
+    const MagiaHeaderModel &model, const GeneratedOp &target,
+    unsigned participantHartid) {
+  for (const GeneratedOp &op : model.ops)
+    if (op.isCollective && op.ownerHartid == participantHartid &&
+        getCollectiveKey(op) == getCollectiveKey(target))
+      return op;
+  llvm_unreachable("collective participant has no operation descriptor");
+}
+
+static uint64_t getSubsliceL1Offset(const MagiaHeaderModel &model,
+                                    unsigned subsliceIndex) {
+  const GeneratedSubslice &subslice = model.subslices[subsliceIndex];
+  const GeneratedSlice &slice = model.slices[subslice.sliceIndex];
+  return slice.l1OffsetBytes +
+         computeOffsetBytes(subslice.offset, subslice.stridesBytes);
+}
+
+static uint64_t getFifoSlotDataSize(const MagiaHeaderModel &model,
+                                    const GeneratedTilePlan &plan);
+
+static void emitL1DataBaseOffset(const MagiaHeaderModel &model,
+                                 int64_t hartid, llvm::raw_ostream &os) {
+  const GeneratedTilePlan &plan = model.tilePlans.find(hartid)->second;
+  const uint64_t slotDataSize = getFifoSlotDataSize(model, plan);
+  os << "FIFO_HEADER_SIZE + " << plan.recvIndices.size()
+     << "u * FIFO_RING_STATE_SIZE + " << plan.recvIndices.size()
+     << "u * MAPS_NUM_TOKEN_SLOTS * (FIFO_SLOT_META_SIZE + (("
+     << slotDataSize << "u + 3u) & ~3u))";
+}
+
 static void emitOpDesc(const MagiaHeaderModel &model,
                        const GeneratedOp &op,
                        llvm::raw_ostream &os) {
@@ -375,6 +422,39 @@ static void emitOpDesc(const MagiaHeaderModel &model,
   os << "    .outputs = ";
   emitSubsliceArray(model, op.outputSubsliceIndices, 2, os);
   os << ",\n";
+  if (op.isCollective) {
+    os << "    .collective = {.stage_id = " << op.collectiveIdentity.stageId
+       << "u, .layer_index = " << op.collectiveIdentity.layerIndex
+       << "u, .group_id = " << op.collectiveIdentity.groupId
+       << "u, .flag_base = " << getCollectiveFlagBase(model, op)
+       << "u, .num_token_slots = " << model.numTokenSlots
+       << "u, .num_participants = " << op.collectiveParticipants.size()
+       << "u, .participants = {";
+    for (auto participant : llvm::enumerate(op.collectiveParticipants)) {
+      if (participant.index() != 0)
+        os << ", ";
+      const GeneratedOp &participantOp = getParticipantCollectiveOp(
+          model, op, participant.value());
+      const GeneratedSubslice &input =
+          model.subslices[participantOp.inputSubsliceIndices.front()];
+      const GeneratedSubslice &output =
+          model.subslices[participantOp.outputSubsliceIndices.front()];
+      const GeneratedSlice &inputSlice = model.slices[input.sliceIndex];
+      const GeneratedSlice &outputSlice = model.slices[output.sliceIndex];
+      os << "{.hartid = " << participant.value()
+         << "u, .l1_data_base_offset = ";
+      emitL1DataBaseOffset(model, participant.value(), os);
+      os << ", .input_l1_offset_bytes = "
+         << getSubsliceL1Offset(model,
+                                participantOp.inputSubsliceIndices.front())
+         << "u, .input_slot_bytes = " << inputSlice.slotBytes
+         << "u, .output_l1_offset_bytes = "
+         << getSubsliceL1Offset(model,
+                                participantOp.outputSubsliceIndices.front())
+         << "u, .output_slot_bytes = " << outputSlice.slotBytes << "u}";
+    }
+    os << "}},\n";
+  }
   os << "    .params = {";
   for (unsigned i = 0; i < 8; ++i) {
     if (i != 0)
@@ -556,96 +636,18 @@ static void emitPlanArrayAssignment(StringRef fieldName, StringRef arraySuffix,
      << hartid << "_" << arraySuffix << ";\n";
 }
 
-static void emitExecuteOp(llvm::raw_ostream &os) {
-  os << "static inline void maps_generated_zero_l1_bytes(\n";
-  os << "    uint32_t addr, uint32_t bytes) {\n";
-  os << "  volatile uint32_t *words = (volatile uint32_t *)addr;\n";
-  os << "  uint32_t num_words = bytes / sizeof(uint32_t);\n\n";
-  os << "  for (uint32_t i = 0u; i < num_words; ++i)\n";
-  os << "    words[i] = 0u;\n";
-  os << "  if ((bytes & 2u) != 0u)\n";
-  os << "    *(volatile uint16_t *)(addr + num_words * sizeof(uint32_t)) = 0u;\n";
-  os << "}\n\n";
-
-  os << "static inline int maps_generated_execute_op(\n";
-  os << "    const tile_plan_t *plan, const op_desc_t *op,\n";
-  os << "    uint32_t slot, void *user) {\n";
-  os << "  maps_generated_runtime_t *runtime = "
-        "(maps_generated_runtime_t *)user;\n\n";
-  os << "  if (op->kind == OP_MATMUL) {\n";
-  os << "    uint32_t lhs = local_subslice_addr(plan, &op->inputs[0], slot);\n";
-  os << "    uint32_t rhs = local_subslice_addr(plan, &op->inputs[1], slot);\n";
-  os << "    uint32_t out = local_subslice_addr(plan, &op->outputs[0], slot);\n\n";
-  os << "    if (op->outputs[0].elem_type != ELEM_F16)\n";
-  os << "      return -1;\n";
-  os << "    maps_generated_zero_l1_bytes(\n";
-  os << "        out, op->params[0] * op->params[2] * sizeof(float16));\n";
-  os << "    maps_matmul_redmule(runtime->redmule_ctrl, runtime->eu_ctrl,\n";
-  os << "                        lhs, rhs, out,\n";
-  os << "                        (uint16_t)op->params[0],\n";
-  os << "                        (uint16_t)op->params[1],\n";
-  os << "                        (uint16_t)op->params[2],\n";
-  os << "                        MAPS_WAIT_MODE);\n";
-  os << "    return 0;\n";
-  os << "  }\n\n";
-  os << "  if (op->kind == OP_CONV2D) {\n";
-  os << "    uint32_t input = local_subslice_addr(plan, &op->inputs[0], slot);\n";
-  os << "    uint32_t weight = local_subslice_addr(plan, &op->inputs[1], slot);\n";
-  os << "    uint32_t bias = op->num_inputs == 3u\n";
-  os << "        ? local_subslice_addr(plan, &op->inputs[2], slot) : 0u;\n";
-  os << "    uint32_t output = local_subslice_addr(plan, &op->outputs[0], slot);\n\n";
-  os << "    if (op->outputs[0].elem_type != ELEM_F16)\n";
-  os << "      return -1;\n";
-  os << "    maps_conv2d_nchw_f16(\n";
-  os << "        (float16 *)output, (const float16 *)input,\n";
-  os << "        (const float16 *)weight,\n";
-  os << "        bias != 0u ? (const float16 *)bias : 0,\n";
-  os << "        op->inputs[0].shape[0], op->inputs[0].shape[1],\n";
-  os << "        op->inputs[0].shape[2], op->inputs[0].shape[3],\n";
-  os << "        op->outputs[0].shape[1], op->outputs[0].shape[2],\n";
-  os << "        op->outputs[0].shape[3], op->inputs[1].shape[2],\n";
-  os << "        op->inputs[1].shape[3], op->params[0], op->params[1],\n";
-  os << "        op->params[2], op->params[3], op->params[4],\n";
-  os << "        op->params[5], op->params[6], op->params[7]);\n";
-  os << "    return 0;\n";
-  os << "  }\n\n";
-  os << "  if (op->kind == OP_LOG) {\n";
-  os << "    uint32_t in = local_subslice_addr(plan, &op->inputs[0], slot);\n";
-  os << "    uint32_t out = local_subslice_addr(plan, &op->outputs[0], slot);\n\n";
-  os << "    if (op->outputs[0].elem_type != ELEM_F16)\n";
-  os << "      return -1;\n";
-  os << "    maps_log_f16((float16 *)out, (const float16 *)in,\n";
-  os << "                 (int32_t)op->params[2]);\n";
-  os << "    return 0;\n";
-  os << "  }\n\n";
-  os << "  if (op->kind == OP_ADD) {\n";
-  os << "    uint32_t lhs = local_subslice_addr(plan, &op->inputs[0], slot);\n";
-  os << "    uint32_t rhs = local_subslice_addr(plan, &op->inputs[1], slot);\n";
-  os << "    uint32_t out = local_subslice_addr(plan, &op->outputs[0], slot);\n\n";
-  os << "    if (op->outputs[0].elem_type == ELEM_F16) {\n";
-  os << "      maps_add_f16((float16 *)out, (const float16 *)lhs,\n";
-  os << "                   (const float16 *)rhs, (int32_t)op->params[2]);\n";
-  os << "      return 0;\n";
-  os << "    }\n";
-  os << "    return maps_execute_builtin_op(plan, op, slot);\n";
-  os << "  }\n\n";
-  os << "  return maps_execute_builtin_op(plan, op, slot);\n";
-  os << "}\n\n";
-}
-
 static void emitFillPlan(const MagiaHeaderModel &model,
                          llvm::raw_ostream &os) {
   os << "static inline uint32_t maps_generated_fill_plan(\n";
   os << "    fifo_tile_plan_t *plan, uint32_t hartid,\n";
-  os << "    maps_generated_runtime_t *runtime) {\n";
+  os << "    maps_operation_runtime_t *runtime) {\n";
   os << "  *plan = (fifo_tile_plan_t){\n";
   os << "    .hartid = hartid,\n";
   os << "    .l1_data_base = get_l1_base(hartid),\n";
   os << "    .ready_flags_base = MAPS_GENERATED_READY_FLAGS_OFFSET,\n";
   os << "    .ready_flags_count = MAPS_GENERATED_READY_FLAGS_WORDS,\n";
   os << "    .num_token_slots = MAPS_NUM_TOKEN_SLOTS,\n";
-  os << "    .execute_op = maps_generated_execute_op,\n";
-  os << "    .execute_op_user = runtime,\n";
+  os << "    .operation_runtime = runtime,\n";
   os << "  };\n\n";
   os << "  switch (hartid) {\n";
 
@@ -785,7 +787,6 @@ void emitDebugHeader(const MagiaHeaderModel &model, llvm::raw_ostream &os) {
   emitTileSendDescriptors(model, os);
   emitTileL2WriteDescriptors(model, os);
   emitFifoStorageHelper(os);
-  emitExecuteOp(os);
   emitFillPlan(model, os);
   emitFirstOutputChecker(model, os);
 

@@ -150,11 +150,21 @@ struct GeneratedSend {
   unsigned producerIdx = 0;
 };
 
+struct GeneratedCollectiveIdentity {
+  unsigned stageId = 0;
+  unsigned layerIndex = 0;
+  unsigned groupId = 0;
+};
+
 struct GeneratedOp {
   unsigned modelIndex = 0;
+  int64_t ownerHartid = -1;
   GeneratedOpKind kind = GeneratedOpKind::Copy;
   SmallVector<unsigned> inputSubsliceIndices;
   SmallVector<unsigned> outputSubsliceIndices;
+  bool isCollective = false;
+  GeneratedCollectiveIdentity collectiveIdentity;
+  SmallVector<unsigned> collectiveParticipants;
   uint32_t params[8] = {};
 };
 
