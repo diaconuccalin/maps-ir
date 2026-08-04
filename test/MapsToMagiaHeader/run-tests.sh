@@ -159,8 +159,14 @@ granular_sharding_fixture="${test_dir}/granular_sharding.json"
   "${granular_sharding_fixture}"
 "${translator}" --json-to-maps "${granular_sharding_fixture}" \
   -o "${test_dir}/granular_sharding.mlir"
-grep -q 'tensor<6xf16>' "${test_dir}/granular_sharding.mlir"
-grep -q 'tensor<3xf16>' "${test_dir}/granular_sharding.mlir"
+grep -Fq 'maps.recv @transition_0_destination_0 {dst_hartid = 0 : i64, src_hartid = -1 : i64} : tensor<6xf16>' \
+  "${test_dir}/granular_sharding.mlir"
+grep -Fq 'maps.recv @transition_0_destination_1 {dst_hartid = 1 : i64, src_hartid = -1 : i64} : tensor<3xf16>' \
+  "${test_dir}/granular_sharding.mlir"
+grep -Fq 'tensor.insert_slice %1 into %0[0] [6] [1] : tensor<6xf16> into tensor<9xf16>' \
+  "${test_dir}/granular_sharding.mlir"
+grep -Fq 'tensor.insert_slice %2 into %inserted_slice[6] [3] [1] : tensor<3xf16> into tensor<9xf16>' \
+  "${test_dir}/granular_sharding.mlir"
 
 legacy_sharding_with_defaults="${test_dir}/legacy_sharding_with_defaults.json"
 "${repo_root}/../.venv/bin/python" "${granular_sharding_writer}" \
