@@ -7,11 +7,22 @@ fixture="${repo_root}/test/MapsToMagiaHeader/packed_weights.mlir"
 conv2d_fixture="${repo_root}/test/MapsToMagiaHeader/conv2d.json"
 descriptor_fixture="${repo_root}/test/MapsToMagiaHeader/descriptor_kernels.mlir"
 execution_plan_fixture="${repo_root}/test/MapsToMagiaHeader/execution_plan.json"
-granular_sharding_fixture="${repo_root}/test/MapsToMagiaHeader/granular_sharding.json"
+granular_sharding_writer="${repo_root}/test/MapsToMagiaHeader/write_granular_sharding_fixture.py"
 planner_execution_plan_fixture="${repo_root}/examples/magia_example.execution-plan.json"
 sigmoid_fixture="${repo_root}/test/MapsToMagiaHeader/sigmoid.json"
 test_dir="$(mktemp -d)"
 trap 'rm -rf "${test_dir}"' EXIT
+shard_mode=1
+replicate_mode=3
+
+expect_json_translation_failure() {
+  local input_path="$1"
+  local diagnostic="$2"
+  if "${translator}" --json-to-maps "${input_path}" -o /dev/null 2>/dev/null; then
+    echo "${diagnostic}" >&2
+    exit 1
+  fi
+}
 
 cmake --build "${repo_root}/build" --target maps-translate -j2 >/dev/null
 
@@ -143,16 +154,18 @@ grep -q '.participants = {{.hartid = 0u' \
 grep -q 'maps.kernel.*kind = "SIGMOID"' "${test_dir}/sigmoid.mlir"
 grep -q '.kind = OP_SIGMOID' "${test_dir}/sigmoid_generated.h"
 
+granular_sharding_fixture="${test_dir}/granular_sharding.json"
+"${repo_root}/../.venv/bin/python" "${granular_sharding_writer}" \
+  "${granular_sharding_fixture}"
 "${translator}" --json-to-maps "${granular_sharding_fixture}" \
   -o "${test_dir}/granular_sharding.mlir"
 grep -q 'tensor<6xf16>' "${test_dir}/granular_sharding.mlir"
 grep -q 'tensor<3xf16>' "${test_dir}/granular_sharding.mlir"
 
-sed -e '/"shard_granularity"/d' \
-  -e '/"tensor_axis":/s/,$//' \
-  -e 's/"start": 0, "length": 6/"start": 0, "length": 5/g' \
-  -e 's/"start": 6, "length": 3/"start": 5, "length": 4/g' \
-  "${granular_sharding_fixture}" \
+legacy_sharding_with_defaults="${test_dir}/legacy_sharding_with_defaults.json"
+"${repo_root}/../.venv/bin/python" "${granular_sharding_writer}" \
+  "${legacy_sharding_with_defaults}" 1
+sed '/"shard_granularity"/d' "${legacy_sharding_with_defaults}" \
   > "${test_dir}/legacy_sharding.json"
 "${translator}" --json-to-maps "${test_dir}/legacy_sharding.json" \
   -o "${test_dir}/legacy_sharding.mlir"
@@ -161,19 +174,22 @@ grep -q 'tensor<4xf16>' "${test_dir}/legacy_sharding.mlir"
 
 sed 's/"shard_granularity": 3/"shard_granularity": 4/' \
   "${granular_sharding_fixture}" > "${test_dir}/non_divisible_sharding.json"
-if "${translator}" --json-to-maps "${test_dir}/non_divisible_sharding.json" \
-    -o /dev/null 2>/dev/null; then
-  echo "expected non-divisible shard granularity failure" >&2
-  exit 1
-fi
+expect_json_translation_failure \
+  "${test_dir}/non_divisible_sharding.json" \
+  "expected non-divisible shard granularity failure"
 
-sed '0,/"mode": 1/s//"mode": 3/' "${granular_sharding_fixture}" \
+sed "0,/\"mode\": ${shard_mode}/s//\"mode\": ${replicate_mode}/" \
+  "${granular_sharding_fixture}" \
   > "${test_dir}/non_sharded_granularity.json"
-if "${translator}" --json-to-maps "${test_dir}/non_sharded_granularity.json" \
-    -o /dev/null 2>/dev/null; then
-  echo "expected non-sharded granularity failure" >&2
-  exit 1
-fi
+expect_json_translation_failure \
+  "${test_dir}/non_sharded_granularity.json" \
+  "expected non-sharded granularity failure"
+
+sed 's/"shard_granularity": 3/"shard_granularity": "three"/' \
+  "${granular_sharding_fixture}" > "${test_dir}/non_integer_granularity.json"
+expect_json_translation_failure \
+  "${test_dir}/non_integer_granularity.json" \
+  "expected non-integer shard granularity failure"
 
 "${translator}" --json-to-maps "${execution_plan_fixture}" \
   -o "${test_dir}/execution_plan.mlir"
