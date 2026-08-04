@@ -7,6 +7,7 @@ fixture="${repo_root}/test/MapsToMagiaHeader/packed_weights.mlir"
 conv2d_fixture="${repo_root}/test/MapsToMagiaHeader/conv2d.json"
 descriptor_fixture="${repo_root}/test/MapsToMagiaHeader/descriptor_kernels.mlir"
 execution_plan_fixture="${repo_root}/test/MapsToMagiaHeader/execution_plan.json"
+granular_sharding_fixture="${repo_root}/test/MapsToMagiaHeader/granular_sharding.json"
 planner_execution_plan_fixture="${repo_root}/examples/magia_example.execution-plan.json"
 sigmoid_fixture="${repo_root}/test/MapsToMagiaHeader/sigmoid.json"
 test_dir="$(mktemp -d)"
@@ -141,6 +142,38 @@ grep -q '.participants = {{.hartid = 0u' \
 
 grep -q 'maps.kernel.*kind = "SIGMOID"' "${test_dir}/sigmoid.mlir"
 grep -q '.kind = OP_SIGMOID' "${test_dir}/sigmoid_generated.h"
+
+"${translator}" --json-to-maps "${granular_sharding_fixture}" \
+  -o "${test_dir}/granular_sharding.mlir"
+grep -q 'tensor<6xf16>' "${test_dir}/granular_sharding.mlir"
+grep -q 'tensor<3xf16>' "${test_dir}/granular_sharding.mlir"
+
+sed -e '/"shard_granularity"/d' \
+  -e '/"tensor_axis":/s/,$//' \
+  -e 's/"start": 0, "length": 6/"start": 0, "length": 5/g' \
+  -e 's/"start": 6, "length": 3/"start": 5, "length": 4/g' \
+  "${granular_sharding_fixture}" \
+  > "${test_dir}/legacy_sharding.json"
+"${translator}" --json-to-maps "${test_dir}/legacy_sharding.json" \
+  -o "${test_dir}/legacy_sharding.mlir"
+grep -q 'tensor<5xf16>' "${test_dir}/legacy_sharding.mlir"
+grep -q 'tensor<4xf16>' "${test_dir}/legacy_sharding.mlir"
+
+sed 's/"shard_granularity": 3/"shard_granularity": 4/' \
+  "${granular_sharding_fixture}" > "${test_dir}/non_divisible_sharding.json"
+if "${translator}" --json-to-maps "${test_dir}/non_divisible_sharding.json" \
+    -o /dev/null 2>/dev/null; then
+  echo "expected non-divisible shard granularity failure" >&2
+  exit 1
+fi
+
+sed '0,/"mode": 1/s//"mode": 3/' "${granular_sharding_fixture}" \
+  > "${test_dir}/non_sharded_granularity.json"
+if "${translator}" --json-to-maps "${test_dir}/non_sharded_granularity.json" \
+    -o /dev/null 2>/dev/null; then
+  echo "expected non-sharded granularity failure" >&2
+  exit 1
+fi
 
 "${translator}" --json-to-maps "${execution_plan_fixture}" \
   -o "${test_dir}/execution_plan.mlir"

@@ -729,12 +729,24 @@ parseTileOutputSlice(const llvm::json::Object &tensor,
         auto mode = mapping.getInteger("mode");
         if (!mode)
             return false;
+        int64_t shardGranularity =
+            mapping.getInteger("shard_granularity").value_or(1);
+        if (shardGranularity <= 0)
+            return false;
         if (*mode != 1)
-            return true;
+            return shardGranularity == 1;
         auto axis = mapping.getInteger("tensor_axis");
         if (!axis || *axis < 0 || static_cast<size_t>(*axis) >= dims.size())
             return false;
-        dims[*axis] = partitionDim(dims[*axis].length, parts, index);
+        SliceDim &dim = dims[*axis];
+        if (dim.length % shardGranularity != 0)
+            return false;
+        SliceDim unitRange = partitionDim(
+            dim.length / shardGranularity, parts, index);
+        dim = {
+            dim.start + unitRange.start * shardGranularity,
+            unitRange.length * shardGranularity,
+        };
         return true;
     };
 
