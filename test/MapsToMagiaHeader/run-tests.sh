@@ -12,6 +12,7 @@ execution_plan_fixture="${repo_root}/test/MapsToMagiaHeader/execution_plan.json"
 granular_sharding_writer="${repo_root}/test/MapsToMagiaHeader/write_granular_sharding_fixture.py"
 planner_execution_plan_fixture="${repo_root}/examples/magia_example.execution-plan.json"
 sigmoid_fixture="${repo_root}/test/MapsToMagiaHeader/sigmoid.json"
+two_tile_fixture="${repo_root}/test/MapsToMagiaHeader/two_tile_transitions.mlir"
 test_dir="$(mktemp -d)"
 trap 'rm -rf "${test_dir}"' EXIT
 shard_mode=1
@@ -366,6 +367,25 @@ for tile_id in 00 01 02 03; do
   grep -q "collective_build_tile_${tile_id}_plan" \
     "${collective_output_dir}/src/collective.c"
 done
+
+transition_output_dir="${test_dir}/transition-output"
+"${code_generator}" "${two_tile_fixture}" \
+  --target=magia-v2 \
+  --maps-magia-output-stem=transitions \
+  --maps-magia-weights-file="${source_weights}" \
+  -o "${transition_output_dir}"
+grep -q 'static const fifo_send_desc_t' \
+  "${transition_output_dir}/src/tiles/tile_00.c"
+grep -q '.src_hartid = 0' \
+  "${transition_output_dir}/src/tiles/tile_00.c"
+grep -q '.dst_hartid = 1' \
+  "${transition_output_dir}/src/tiles/tile_00.c"
+grep -q 'static const fifo_recv_desc_t' \
+  "${transition_output_dir}/src/tiles/tile_01.c"
+grep -q '.src_hartid = 0' \
+  "${transition_output_dir}/src/tiles/tile_01.c"
+grep -q '.dst_hartid = 1' \
+  "${transition_output_dir}/src/tiles/tile_01.c"
 
 missing_identity_mlir="${test_dir}/missing-identity.mlir"
 sed 's/, maps.mesh_height = 1 : i64, maps.mesh_width = 1 : i64, maps.name = "sigmoid"//' \
