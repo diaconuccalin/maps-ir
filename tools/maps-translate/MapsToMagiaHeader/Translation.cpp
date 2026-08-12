@@ -488,24 +488,43 @@ static LogicalResult writeApplicationManifest(const MagiaHeaderModel &model,
   }
 
   std::string name = model.outputStem;
-  llvm::json::Array generatedFiles{
-      "CMakeLists.txt",
-      "README.md",
-      "manifest.json",
-      "include/" + name + ".h",
-      "src/" + name + ".c",
-      "src/" + name + "_runner.c",
-      "src/" + name + "_initializers.S.in",
-      "data/" + name + ".initializers.bin",
+  SmallVector<PackageArtifact> generatedArtifacts{
+      {"CMakeLists.txt", "build_definition"},
+      {"README.md", "integration_guide"},
+      {"include/" + name + ".h", "model_interface"},
+      {"src/" + name + ".c", "model_data"},
+      {"src/" + name + "_runner.c", "application_runner"},
+      {"src/" + name + "_initializers.S.in", "initializer_assembly"},
+      {"data/" + name + ".initializers.bin", "initializer_data"},
   };
   for (const GeneratedTilePlan *tilePlan : getSortedTilePlans(model))
-    generatedFiles.push_back("src/tiles/" +
-                             getApplicationTileFilename(model,
-                                                        tilePlan->hartid));
+    generatedArtifacts.push_back(
+        {"src/tiles/" +
+             getApplicationTileFilename(model, tilePlan->hartid),
+         "tile_plan"});
   for (const GeneratedL2Global &global : model.l2Globals)
     if (!global.runtimeInputFile.empty())
-      generatedFiles.push_back("data/" + global.runtimeInputAsset);
-  llvm::json::Array userOwnedFiles{"src/application.c"};
+      generatedArtifacts.push_back(
+          {"data/" + global.runtimeInputAsset, "runtime_input_data"});
+  llvm::json::Array generatedFiles;
+  for (const PackageArtifact &artifact : generatedArtifacts) {
+    auto contentsOrError = llvm::MemoryBuffer::getFile(
+        packageArtifactPath(outputDirectory, artifact.path), /*IsText=*/false,
+        /*RequiresNullTerminator=*/false);
+    if (!contentsOrError)
+      return failure();
+    StringRef contents = (*contentsOrError)->getBuffer();
+    generatedFiles.push_back(llvm::json::Object{
+        {"path", artifact.path},
+        {"role", artifact.role},
+        {"byte_size", static_cast<int64_t>(contents.size())},
+        {"sha256", sha256(contents)},
+    });
+  }
+  llvm::json::Array userOwnedFiles{llvm::json::Object{
+      {"path", "src/application.c"},
+      {"role", "application_source"},
+  }};
 
   llvm::json::Object manifest{
       {"schema_version", 1},

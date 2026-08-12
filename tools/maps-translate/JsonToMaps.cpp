@@ -68,6 +68,7 @@ struct TileSourceChannelBinding {
     int64_t transitionId = -1;
     int64_t sourceStageId = -1;
     int64_t destinationStageId = -1;
+    std::string globalName;
 };
 
 using TileSourceChannelBindingVector = SmallVector<TileSourceChannelBinding, 0>;
@@ -1133,7 +1134,8 @@ struct ExecutionPlanChannelBindings {
 };
 
 static std::optional<ExecutionPlanChannelBindings>
-getExecutionPlanChannelBindings(const llvm::json::Array &transitions) {
+getExecutionPlanChannelBindings(const llvm::json::Array &transitions,
+                                const llvm::json::Array &tensors) {
     ExecutionPlanChannelBindings result;
 
     for (auto transitionEntry : llvm::enumerate(transitions)) {
@@ -1231,6 +1233,10 @@ getExecutionPlanChannelBindings(const llvm::json::Array &transitions) {
             auto *sources = transition->getArray("sources");
             if (!sourceStageId || !sources)
                 return std::nullopt;
+            auto *tensor = tensors[*tensorId].getAsObject();
+            auto tensorName = tensor ? tensor->getString("name") : std::nullopt;
+            if (!tensorName)
+                return std::nullopt;
             for (auto sourceEntry : llvm::enumerate(*sources)) {
                 auto *source = sourceEntry.value().getAsObject();
                 auto tileId = source->getInteger("tile_id");
@@ -1254,6 +1260,8 @@ getExecutionPlanChannelBindings(const llvm::json::Array &transitions) {
                     false,
                     static_cast<int64_t>(transitionEntry.index()),
                     *sourceStageId,
+                    -1,
+                    tensorName->str(),
                 });
             }
             continue;
@@ -1516,7 +1524,7 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
 
     auto l2SourceBindings = getInitializerChannelBindings(*stages);
     auto executionPlanBindings =
-        getExecutionPlanChannelBindings(*transitions);
+        getExecutionPlanChannelBindings(*transitions, *tensors);
     if (!l2SourceBindings || !executionPlanBindings)
         return {};
     l2SourceBindings->append(
@@ -2528,7 +2536,7 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                     strides
                 );
 
-                maps::SendOp::create(
+                auto send = maps::SendOp::create(
                     builder,
                     loc,
                     slice,
@@ -2536,6 +2544,8 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
                     builder.getI64IntegerAttr(binding.srcHartId),
                     builder.getI64IntegerAttr(binding.dstHartId)
                 );
+                send->setAttr("maps.global_name",
+                              builder.getStringAttr(binding.globalName));
             }
 
             builder.setInsertionPointAfter(tile);

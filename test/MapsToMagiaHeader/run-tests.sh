@@ -320,6 +320,7 @@ grep -q 'src/application.c' "${expert_output_dir}/README.md"
 
 python3 - "${expert_output_dir}" <<'PY'
 import json
+import hashlib
 from pathlib import Path
 import sys
 
@@ -339,12 +340,21 @@ assert manifest["tensors"]["inputs"][0]["normalized_name"] == "x"
 assert manifest["tensors"]["inputs"][0]["shape"] == [2, 2]
 assert manifest["tensors"]["inputs"][0]["dtype"] == "float16"
 assert manifest["tensors"]["inputs"][0]["byte_size"] == 8
-assert manifest["tensors"]["outputs"][0]["original_name"] == \
-    "transition_1_source_0"
+assert manifest["tensors"]["outputs"][0]["original_name"] == "y"
 assert manifest["memory"]["initializers_bytes"] == 4
-assert manifest["files"]["user_owned"] == ["src/application.c"]
-assert "src/my_model_v1_runner.c" in manifest["files"]["generated"]
-assert "src/tiles/tile_00.c" in manifest["files"]["generated"]
+assert manifest["files"]["user_owned"] == [{
+    "path": "src/application.c",
+    "role": "application_source",
+}]
+generated = manifest["files"]["generated"]
+generated_paths = {record["path"] for record in generated}
+assert "src/my_model_v1_runner.c" in generated_paths
+assert "src/tiles/tile_00.c" in generated_paths
+for record in generated:
+    assert set(record) == {"path", "role", "byte_size", "sha256"}
+    data = (application / record["path"]).read_bytes()
+    assert record["byte_size"] == len(data)
+    assert record["sha256"] == hashlib.sha256(data).hexdigest()
 PY
 
 second_expert_output_dir="${test_dir}/second-expert-output"
@@ -437,7 +447,7 @@ assert manifest["source_model"] == {
     }],
     "outputs": [{
         "id": 2,
-        "name": "transition_1_source_0",
+        "name": "y",
         "dtype": "float16",
         "shape": [2, 2],
         "encoding": "raw",

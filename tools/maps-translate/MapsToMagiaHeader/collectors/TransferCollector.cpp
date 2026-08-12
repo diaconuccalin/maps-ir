@@ -212,6 +212,9 @@ LogicalResult collectProducedSend(Operation *sendOp, RunCollectionState &state,
                                  ? GeneratedGlobalKind::Output
                                  : GeneratedGlobalKind::Intermediate;
   std::string globalName = getChannelBaseName(channel);
+  if (kind == GeneratedGlobalKind::Output)
+    if (auto name = sendOp->getAttrOfType<StringAttr>("maps.global_name"))
+      globalName = name.getValue().str();
   std::string uniqueKey =
       (Twine(static_cast<int>(kind)) + ":" + Twine(srcHartid.getInt()) + ":" +
        globalName + ":" + getProducedValueKey(state, source->rootValue))
