@@ -447,19 +447,6 @@ applicationTensorEntry(const GeneratedL2Global &global) {
   };
 }
 
-static SmallVector<const GeneratedTilePlan *>
-getSortedApplicationTilePlans(const MagiaHeaderModel &model) {
-  SmallVector<const GeneratedTilePlan *> plans;
-  plans.reserve(model.tilePlans.size());
-  for (const auto &entry : model.tilePlans)
-    plans.push_back(&entry.second);
-  llvm::sort(plans, [](const GeneratedTilePlan *lhs,
-                       const GeneratedTilePlan *rhs) {
-    return lhs->hartid < rhs->hartid;
-  });
-  return plans;
-}
-
 static LogicalResult writeApplicationManifest(const MagiaHeaderModel &model,
                                               StringRef outputDirectory) {
   llvm::json::Array inputs;
@@ -479,8 +466,7 @@ static LogicalResult writeApplicationManifest(const MagiaHeaderModel &model,
 
   llvm::json::Array activeTiles;
   uint64_t maxTileDataBytes = 0;
-  for (const GeneratedTilePlan *tilePlan :
-       getSortedApplicationTilePlans(model)) {
+  for (const GeneratedTilePlan *tilePlan : getSortedTilePlans(model)) {
     activeTiles.push_back(tilePlan->hartid);
     maxTileDataBytes = std::max(maxTileDataBytes, tilePlan->l1DataBytes);
   }
@@ -496,8 +482,7 @@ static LogicalResult writeApplicationManifest(const MagiaHeaderModel &model,
       "src/" + name + "_initializers.S.in",
       "data/" + name + ".initializers.bin",
   };
-  for (const GeneratedTilePlan *tilePlan :
-       getSortedApplicationTilePlans(model))
+  for (const GeneratedTilePlan *tilePlan : getSortedTilePlans(model))
     generatedFiles.push_back("src/tiles/" +
                              getApplicationTileFilename(model,
                                                         tilePlan->hartid));
@@ -622,8 +607,7 @@ LogicalResult generateMagiaApplication(ModuleOp module,
             emitApplicationInitializersAssembly(model, os);
           })))
     return failure();
-  for (const GeneratedTilePlan *tilePlan :
-       getSortedApplicationTilePlans(model)) {
+  for (const GeneratedTilePlan *tilePlan : getSortedTilePlans(model)) {
     std::string path =
         "src/tiles/" + getApplicationTileFilename(model, tilePlan->hartid);
     if (failed(writeApplicationText(path, [&](llvm::raw_ostream &os) {

@@ -290,6 +290,10 @@ grep -q '.slot_bytes = ' \
   "${expert_output_dir}/src/tiles/tile_00.c"
 grep -q '.kind = OP_SIGMOID' \
   "${expert_output_dir}/src/tiles/tile_00.c"
+grep -q 'static const l2_read_desc_t' \
+  "${expert_output_dir}/src/tiles/tile_00.c"
+grep -q 'static const l2_write_desc_t' \
+  "${expert_output_dir}/src/tiles/tile_00.c"
 grep -q 'my_model_v1_build_tile_00_plan' \
   "${expert_output_dir}/src/tiles/tile_00.c"
 ! grep -q 'static const slice_desc_t\|static const op_desc_t' \
@@ -358,6 +362,10 @@ collective_output_dir="${test_dir}/collective-output"
   -o "${collective_output_dir}"
 test "$(find "${collective_output_dir}/src/tiles" -name 'tile_*.c' | wc -l)" -eq 4
 grep -Rq '.num_participants = 2u' "${collective_output_dir}/src/tiles"
+for tile_id in 00 01 02 03; do
+  grep -q "collective_build_tile_${tile_id}_plan" \
+    "${collective_output_dir}/src/collective.c"
+done
 
 missing_identity_mlir="${test_dir}/missing-identity.mlir"
 sed 's/, maps.mesh_height = 1 : i64, maps.mesh_width = 1 : i64, maps.name = "sigmoid"//' \

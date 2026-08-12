@@ -351,4 +351,17 @@ LogicalResult allocateSliceInTileL1(MagiaHeaderModel &model, unsigned sliceIndex
 
 }
 
+SmallVector<const GeneratedTilePlan *>
+getSortedTilePlans(const MagiaHeaderModel &model) {
+  SmallVector<const GeneratedTilePlan *> plans;
+  plans.reserve(model.tilePlans.size());
+  for (const auto &entry : model.tilePlans)
+    plans.push_back(&entry.second);
+  llvm::sort(plans, [](const GeneratedTilePlan *lhs,
+                       const GeneratedTilePlan *rhs) {
+    return lhs->hartid < rhs->hartid;
+  });
+  return plans;
+}
+
 } // namespace mlir::maps

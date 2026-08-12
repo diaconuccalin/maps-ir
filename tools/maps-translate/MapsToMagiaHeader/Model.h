@@ -253,6 +253,8 @@ LogicalResult getOrCreateL2Global(MagiaHeaderModel &model,
                                   const struct L2SourceInfo *sourceInfo = nullptr);
 LogicalResult allocateSliceInTileL1(MagiaHeaderModel &model,
                                     unsigned sliceIndex);
+SmallVector<const GeneratedTilePlan *>
+getSortedTilePlans(const MagiaHeaderModel &model);
 
 } // namespace mlir::maps
 

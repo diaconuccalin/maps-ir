@@ -8,22 +8,8 @@
 #include <algorithm>
 #include <map>
 #include <tuple>
-#include <vector>
 
 namespace mlir::maps {
-
-static std::vector<const GeneratedTilePlan *>
-getSortedTilePlans(const MagiaHeaderModel &model) {
-  std::vector<const GeneratedTilePlan *> plans;
-  plans.reserve(model.tilePlans.size());
-  for (const auto &entry : model.tilePlans)
-    plans.push_back(&entry.second);
-  llvm::sort(plans, [](const GeneratedTilePlan *lhs,
-                       const GeneratedTilePlan *rhs) {
-    return lhs->hartid < rhs->hartid;
-  });
-  return plans;
-}
 
 static std::string getPaddedPhysicalTileId(const MagiaHeaderModel &model,
                                            int64_t hartid) {
@@ -31,8 +17,7 @@ static std::string getPaddedPhysicalTileId(const MagiaHeaderModel &model,
   uint64_t physicalTileCount =
       static_cast<uint64_t>(model.meshWidth) * model.meshHeight;
   size_t width = std::max<size_t>(
-      2, std::to_string(physicalTileCount == 0 ? 0 : physicalTileCount - 1)
-             .size());
+      2, std::to_string(physicalTileCount - 1).size());
   if (id.size() < width)
     id.insert(0, width - id.size(), '0');
   return id;
