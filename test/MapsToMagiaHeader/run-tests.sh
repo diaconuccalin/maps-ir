@@ -346,6 +346,10 @@ assert manifest["files"]["user_owned"] == [{
     "path": "src/application.c",
     "role": "application_source",
 }]
+assert manifest["files"]["trust_root"] == [{
+    "path": "manifest.json",
+    "role": "application_manifest",
+}]
 generated = manifest["files"]["generated"]
 generated_paths = {record["path"] for record in generated}
 assert "src/my_model_v1_runner.c" in generated_paths

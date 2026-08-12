@@ -240,6 +240,27 @@ struct PackageArtifact {
   std::string role;
 };
 
+static FailureOr<llvm::json::Array>
+buildArtifactEntries(ArrayRef<PackageArtifact> artifacts,
+                     StringRef outputDirectory) {
+  llvm::json::Array entries;
+  for (const PackageArtifact &artifact : artifacts) {
+    auto contentsOrError = llvm::MemoryBuffer::getFile(
+        packageArtifactPath(outputDirectory, artifact.path), /*IsText=*/false,
+        /*RequiresNullTerminator=*/false);
+    if (!contentsOrError)
+      return failure();
+    StringRef contents = (*contentsOrError)->getBuffer();
+    entries.push_back(llvm::json::Object{
+        {"path", artifact.path},
+        {"role", artifact.role},
+        {"byte_size", static_cast<int64_t>(contents.size())},
+        {"sha256", sha256(contents)},
+    });
+  }
+  return entries;
+}
+
 static LogicalResult writeDeploymentManifest(
     const MagiaHeaderModel &model, ArrayRef<PackageArtifact> artifacts,
     StringRef outputDirectory) {
@@ -267,21 +288,10 @@ static LogicalResult writeDeploymentManifest(
     maxTileDataBytes =
         std::max(maxTileDataBytes, tilePlan.second.l1DataBytes);
 
-  llvm::json::Array artifactEntries;
-  for (const PackageArtifact &artifact : artifacts) {
-    auto contentsOrError = llvm::MemoryBuffer::getFile(
-        packageArtifactPath(outputDirectory, artifact.path), /*IsText=*/false,
-        /*RequiresNullTerminator=*/false);
-    if (!contentsOrError)
-      return failure();
-    StringRef contents = (*contentsOrError)->getBuffer();
-    artifactEntries.push_back(llvm::json::Object{
-        {"path", artifact.path},
-        {"role", artifact.role},
-        {"byte_size", static_cast<int64_t>(contents.size())},
-        {"sha256", sha256(contents)},
-    });
-  }
+  FailureOr<llvm::json::Array> artifactEntries =
+      buildArtifactEntries(artifacts, outputDirectory);
+  if (failed(artifactEntries))
+    return failure();
 
   llvm::json::Object manifest{
       {"schema_version", 1},
@@ -327,7 +337,7 @@ static LogicalResult writeDeploymentManifest(
            {"required_l2_bytes",
             static_cast<int64_t>(model.nextL2Address - model.l2Base)},
        }},
-      {"artifacts", std::move(artifactEntries)},
+      {"artifacts", std::move(*artifactEntries)},
   };
 
   std::string manifestText =
@@ -506,24 +516,17 @@ static LogicalResult writeApplicationManifest(const MagiaHeaderModel &model,
     if (!global.runtimeInputFile.empty())
       generatedArtifacts.push_back(
           {"data/" + global.runtimeInputAsset, "runtime_input_data"});
-  llvm::json::Array generatedFiles;
-  for (const PackageArtifact &artifact : generatedArtifacts) {
-    auto contentsOrError = llvm::MemoryBuffer::getFile(
-        packageArtifactPath(outputDirectory, artifact.path), /*IsText=*/false,
-        /*RequiresNullTerminator=*/false);
-    if (!contentsOrError)
-      return failure();
-    StringRef contents = (*contentsOrError)->getBuffer();
-    generatedFiles.push_back(llvm::json::Object{
-        {"path", artifact.path},
-        {"role", artifact.role},
-        {"byte_size", static_cast<int64_t>(contents.size())},
-        {"sha256", sha256(contents)},
-    });
-  }
+  FailureOr<llvm::json::Array> generatedFiles =
+      buildArtifactEntries(generatedArtifacts, outputDirectory);
+  if (failed(generatedFiles))
+    return failure();
   llvm::json::Array userOwnedFiles{llvm::json::Object{
       {"path", "src/application.c"},
       {"role", "application_source"},
+  }};
+  llvm::json::Array trustRootFiles{llvm::json::Object{
+      {"path", "manifest.json"},
+      {"role", "application_manifest"},
   }};
 
   llvm::json::Object manifest{
@@ -557,7 +560,8 @@ static LogicalResult writeApplicationManifest(const MagiaHeaderModel &model,
             static_cast<int64_t>(model.nextL2Address - model.l2Base)},
            {"max_tile_l1_bytes", static_cast<int64_t>(maxTileDataBytes)},
        }},
-      {"files", llvm::json::Object{{"generated", std::move(generatedFiles)},
+      {"files", llvm::json::Object{{"generated", std::move(*generatedFiles)},
+                                   {"trust_root", std::move(trustRootFiles)},
                                    {"user_owned", std::move(userOwnedFiles)}}},
   };
   std::string manifestText =
