@@ -1,6 +1,7 @@
+#include "CodeGeneration.h"
 #include "Emitter.h"
 #include "IRCollector.h"
-#include "../JsonToMaps.h"
+#include "../ExecutionPlanImporter.h"
 
 #include "maps/Dialect/Maps/IR/Maps.h"
 
@@ -155,8 +156,9 @@ static LogicalResult writeTextArtifact(
   return success();
 }
 
-static std::string packageArtifactPath(StringRef filename) {
-  llvm::SmallString<256> path(magiaPackageDir);
+static std::string packageArtifactPath(StringRef outputDirectory,
+                                       StringRef filename) {
+  llvm::SmallString<256> path(outputDirectory);
   llvm::sys::path::append(path, filename);
   return path.str().str();
 }
@@ -216,7 +218,8 @@ struct PackageArtifact {
 };
 
 static LogicalResult writeDeploymentManifest(
-    const MagiaHeaderModel &model, ArrayRef<PackageArtifact> artifacts) {
+    const MagiaHeaderModel &model, ArrayRef<PackageArtifact> artifacts,
+    StringRef outputDirectory) {
   if (model.sourceModelName.empty() || model.meshWidth == 0 ||
       model.meshHeight == 0)
     return failure();
@@ -244,7 +247,7 @@ static LogicalResult writeDeploymentManifest(
   llvm::json::Array artifactEntries;
   for (const PackageArtifact &artifact : artifacts) {
     auto contentsOrError = llvm::MemoryBuffer::getFile(
-        packageArtifactPath(artifact.path), /*IsText=*/false,
+        packageArtifactPath(outputDirectory, artifact.path), /*IsText=*/false,
         /*RequiresNullTerminator=*/false);
     if (!contentsOrError)
       return failure();
@@ -306,8 +309,9 @@ static LogicalResult writeDeploymentManifest(
 
   std::string manifestText =
       llvm::formatv("{0:2}\n", llvm::json::Value(std::move(manifest))).str();
-  return writeTextArtifact(packageArtifactPath("manifest.json"),
-                           [&](llvm::raw_ostream &os) { os << manifestText; });
+  return writeTextArtifact(
+      packageArtifactPath(outputDirectory, "manifest.json"),
+      [&](llvm::raw_ostream &os) { os << manifestText; });
 }
 
 static OwningOpRef<Operation *>
@@ -317,19 +321,26 @@ translateJsonToMagiaPackage(StringRef input, MLIRContext *context) {
     return {};
   }
 
-  OwningOpRef<Operation *> imported = importJsonToMaps(input, context);
+  OwningOpRef<Operation *> imported = importExecutionPlan(input, context);
   if (!imported)
     return {};
   auto module = dyn_cast<ModuleOp>(imported.get());
   if (!module)
     return {};
 
+  if (failed(generateMagiaApplication(module, magiaPackageDir)))
+    return {};
+  return imported;
+}
+
+LogicalResult generateMagiaApplication(ModuleOp module,
+                                       StringRef outputDirectory) {
   MagiaHeaderModel model;
   configureGeneratedRuntime(model);
   if (!isValidSymbolStem(model.outputStem) || model.l2End <= model.l2Base ||
       failed(collectMagiaHeaderModel(module, model)) ||
       !model.hasPackedWeights)
-    return {};
+    return failure();
 
   StringRef sourceWeights =
       magiaWeightsFile.empty() ? StringRef(model.weightsFile)
@@ -339,26 +350,26 @@ translateJsonToMagiaPackage(StringRef input, MLIRContext *context) {
   if (!weightsOrError) {
     llvm::errs() << "failed to read packed weights '" << sourceWeights
                  << "': " << weightsOrError.getError().message() << "\n";
-    return {};
+    return failure();
   }
   StringRef weights = (*weightsOrError)->getBuffer();
   if (weights.size() != model.weightsSize) {
     llvm::errs() << "packed weights size mismatch: expected "
                  << model.weightsSize << " bytes, found " << weights.size()
                  << "\n";
-    return {};
+    return failure();
   }
   if (sha256(weights) != model.weightsSha256) {
     llvm::errs() << "packed weights checksum mismatch\n";
-    return {};
+    return failure();
   }
 
   std::error_code directoryError =
-      llvm::sys::fs::create_directories(magiaPackageDir);
+      llvm::sys::fs::create_directories(outputDirectory);
   if (directoryError) {
-    llvm::errs() << "failed to create package directory '" << magiaPackageDir
+    llvm::errs() << "failed to create package directory '" << outputDirectory
                  << "': " << directoryError.message() << "\n";
-    return {};
+    return failure();
   }
 
   std::string headerName = model.outputStem + ".h";
@@ -368,31 +379,31 @@ translateJsonToMagiaPackage(StringRef input, MLIRContext *context) {
   model.weightsFile = weightsName;
 
   if (failed(writeTextArtifact(
-          packageArtifactPath(headerName),
+          packageArtifactPath(outputDirectory, headerName),
           [&](llvm::raw_ostream &os) { emitDebugHeader(model, os); })) ||
       failed(writeTextArtifact(
-          packageArtifactPath(dataName),
+          packageArtifactPath(outputDirectory, dataName),
           [&](llvm::raw_ostream &os) { emitDataFile(model, os); })) ||
       failed(writeTextArtifact(
-          packageArtifactPath(assemblyName),
+          packageArtifactPath(outputDirectory, assemblyName),
           [&](llvm::raw_ostream &os) { emitWeightsAssembly(model, os); })))
-    return {};
+    return failure();
 
   {
-    std::string weightsPath = packageArtifactPath(weightsName);
+    std::string weightsPath = packageArtifactPath(outputDirectory, weightsName);
     std::error_code weightsError;
     llvm::raw_fd_ostream weightsStream(
         weightsPath, weightsError, llvm::sys::fs::OF_None);
     if (weightsError) {
       llvm::errs() << "failed to open '" << weightsPath
                    << "': " << weightsError.message() << "\n";
-      return {};
+      return failure();
     }
     weightsStream.write(weights.data(), weights.size());
     weightsStream.flush();
     if (weightsStream.has_error()) {
       llvm::errs() << "failed to write '" << weightsPath << "'\n";
-      return {};
+      return failure();
     }
   }
 
@@ -402,12 +413,12 @@ translateJsonToMagiaPackage(StringRef input, MLIRContext *context) {
       {assemblyName, "weights_assembly"},
       {weightsName, "weights_image"},
   };
-  if (failed(writeDeploymentManifest(model, artifacts))) {
+  if (failed(writeDeploymentManifest(model, artifacts, outputDirectory))) {
     llvm::errs() << "failed to write deployment manifest\n";
-    return {};
+    return failure();
   }
 
-  return imported;
+  return success();
 }
 
 void registerMapsToMagiaHeaderTranslation() {

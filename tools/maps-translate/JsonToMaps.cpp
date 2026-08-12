@@ -2596,6 +2596,11 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
     return OwningOpRef<Operation *>(module.getOperation());
 }
 
+OwningOpRef<Operation *> importExecutionPlan(StringRef input,
+                                             MLIRContext *context) {
+    return importJsonToMaps(input, context);
+}
+
 void registerJsonToMapsTranslation() {
     TranslateToMLIRRegistration reg(
         "json-to-maps",

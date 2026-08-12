@@ -3,6 +3,8 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 translator="${repo_root}/build/tools/maps-translate/maps-translate"
+plan_importer="${repo_root}/build/tools/maps-translate/maps-plan-import"
+code_generator="${repo_root}/build/tools/maps-translate/maps-codegen"
 fixture="${repo_root}/test/MapsToMagiaHeader/packed_weights.mlir"
 conv2d_fixture="${repo_root}/test/MapsToMagiaHeader/conv2d.json"
 descriptor_fixture="${repo_root}/test/MapsToMagiaHeader/descriptor_kernels.mlir"
@@ -24,7 +26,12 @@ expect_json_translation_failure() {
   fi
 }
 
-cmake --build "${repo_root}/build" --target maps-translate -j2 >/dev/null
+cmake --build "${repo_root}/build" \
+  --target maps-translate maps-plan-import maps-codegen -j2 >/dev/null
+
+"${plan_importer}" "${execution_plan_fixture}" \
+  -o "${test_dir}/expert_execution_plan.mlir"
+grep -q '@transition_1_transfer_0' "${test_dir}/expert_execution_plan.mlir"
 
 collective_plan="${test_dir}/collective.execution-plan.json"
 "${repo_root}/../.venv/bin/python" -c \
@@ -230,6 +237,18 @@ grep -q '@initializer_stage_0_layer_0_input_1_destination_0' \
 package_dir="${test_dir}/package"
 source_weights="${test_dir}/source.weights.bin"
 printf 'MAPS' > "${source_weights}"
+expert_output_dir="${test_dir}/expert-output"
+"${code_generator}" "${test_dir}/sigmoid.mlir" \
+  --target=magia-v2 \
+  --maps-magia-output-stem=model \
+  --maps-magia-weights-file="${source_weights}" \
+  -o "${expert_output_dir}"
+test -f "${expert_output_dir}/model.h"
+test -f "${expert_output_dir}/model_data.c"
+test -f "${expert_output_dir}/model_weights.S"
+test -f "${expert_output_dir}/model.weights.bin"
+test -f "${expert_output_dir}/manifest.json"
+
 "${translator}" --json-to-magia-package \
   --maps-magia-package-dir="${package_dir}" \
   --maps-magia-output-stem=model \
