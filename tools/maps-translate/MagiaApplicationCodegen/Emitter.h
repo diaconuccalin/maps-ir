@@ -9,24 +9,24 @@ class raw_ostream;
 
 namespace mlir::maps {
 
-void emitApplicationHeader(const MagiaApplicationDescription &model,
+void emitApplicationHeader(const MagiaApplicationDescription &application,
                            llvm::raw_ostream &os);
-void emitApplicationDataSource(const MagiaApplicationDescription &model,
+void emitApplicationDataSource(const MagiaApplicationDescription &application,
                                 llvm::raw_ostream &os);
-void emitApplicationTileSource(const MagiaApplicationDescription &model,
+void emitApplicationTileSource(const MagiaApplicationDescription &application,
                                const GeneratedTilePlan &plan,
                                llvm::raw_ostream &os);
-void emitApplicationRunner(const MagiaApplicationDescription &model,
+void emitApplicationRunner(const MagiaApplicationDescription &application,
                            llvm::raw_ostream &os);
-void emitInitialApplicationSource(const MagiaApplicationDescription &model,
+void emitInitialApplicationSource(const MagiaApplicationDescription &application,
                                   llvm::raw_ostream &os);
-void emitApplicationCMake(const MagiaApplicationDescription &model,
+void emitApplicationCMake(const MagiaApplicationDescription &application,
                           llvm::raw_ostream &os);
-void emitApplicationReadme(const MagiaApplicationDescription &model,
+void emitApplicationReadme(const MagiaApplicationDescription &application,
                            llvm::raw_ostream &os);
-void emitApplicationInitializersAssembly(const MagiaApplicationDescription &model,
+void emitApplicationInitializersAssembly(const MagiaApplicationDescription &application,
                                          llvm::raw_ostream &os);
-std::string getApplicationTileFilename(const MagiaApplicationDescription &model,
+std::string getApplicationTileFilename(const MagiaApplicationDescription &application,
                                        int64_t hartid);
 
 } // namespace mlir::maps

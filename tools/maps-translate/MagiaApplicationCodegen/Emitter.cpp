@@ -11,11 +11,11 @@
 
 namespace mlir::maps {
 
-static std::string getPaddedPhysicalTileId(const MagiaApplicationDescription &model,
+static std::string getPaddedPhysicalTileId(const MagiaApplicationDescription &application,
                                            int64_t hartid) {
   std::string id = std::to_string(hartid);
   uint64_t physicalTileCount =
-      static_cast<uint64_t>(model.meshWidth) * model.meshHeight;
+      static_cast<uint64_t>(application.meshWidth) * application.meshHeight;
   size_t width = std::max<size_t>(
       2, std::to_string(physicalTileCount - 1).size());
   if (id.size() < width)
@@ -23,21 +23,21 @@ static std::string getPaddedPhysicalTileId(const MagiaApplicationDescription &mo
   return id;
 }
 
-std::string getApplicationTileFilename(const MagiaApplicationDescription &model,
+std::string getApplicationTileFilename(const MagiaApplicationDescription &application,
                                        int64_t hartid) {
-  return "tile_" + getPaddedPhysicalTileId(model, hartid) + ".c";
+  return "tile_" + getPaddedPhysicalTileId(application, hartid) + ".c";
 }
 
-static void emitGeneratedPrelude(const MagiaApplicationDescription &model,
+static void emitGeneratedPrelude(const MagiaApplicationDescription &application,
                                  llvm::raw_ostream &os) {
   os << "#include <stdint.h>\n\n";
   os << "#include \"tile.h\"\n";
   os << "#include \"utils/maps_operations.h\"\n";
   os << "#include \"utils/maps_utils_v2.h\"\n\n";
   os << "#define MAPS_APPLICATION_NUM_TOKENS "
-     << model.numTokens << "u\n";
+     << application.numTokens << "u\n";
   os << "#define MAPS_APPLICATION_NUM_TOKEN_SLOTS "
-     << model.numTokenSlots << "u\n";
+     << application.numTokenSlots << "u\n";
   os << "#define MAPS_APPLICATION_L1_DATA_OFFSET "
      << kGeneratedL1DataBaseOffset << "u\n";
   os << "#define MAPS_APPLICATION_READY_FLAGS_OFFSET "
@@ -60,24 +60,24 @@ static std::string getL2GlobalSymbol(const GeneratedL2Global &global) {
   return (Twine("maps_application_l2_global_") + Twine(global.descriptionIndex)).str();
 }
 
-static std::string getWeightsSymbol(const MagiaApplicationDescription &model,
+static std::string getWeightsSymbol(const MagiaApplicationDescription &application,
                                     StringRef suffix) {
-  return (Twine(model.outputStem) + "_weights_" + suffix).str();
+  return (Twine(application.outputStem) + "_weights_" + suffix).str();
 }
 
-static std::string getRuntimeInputSymbol(const MagiaApplicationDescription &model,
+static std::string getRuntimeInputSymbol(const MagiaApplicationDescription &application,
                                          const GeneratedL2Global &global,
                                          StringRef suffix) {
-  return (Twine(model.outputStem) + "_input_" +
+  return (Twine(application.outputStem) + "_input_" +
           normalizeSnakeCase(global.globalName) + "_" + suffix)
       .str();
 }
 
-static void emitL2GlobalAddress(const MagiaApplicationDescription &model,
+static void emitL2GlobalAddress(const MagiaApplicationDescription &application,
                                 const GeneratedL2Global &global,
                                 uint64_t offset, llvm::raw_ostream &os) {
   if (global.isConstant) {
-    os << getWeightsSymbol(model, "start");
+    os << getWeightsSymbol(application, "start");
     uint64_t packedOffset = global.packedImageOffset + offset;
     if (packedOffset != 0)
       os << " + " << packedOffset << "u";
@@ -92,17 +92,17 @@ static uint64_t getL2GlobalAllocationBytes(const GeneratedL2Global &global) {
   return global.tokenStrideBytes * global.numTokens;
 }
 
-static void emitL2GlobalDeclarations(const MagiaApplicationDescription &model,
+static void emitL2GlobalDeclarations(const MagiaApplicationDescription &application,
                                      llvm::raw_ostream &os) {
-  if (model.hasPackedWeights) {
-    os << "extern const uint8_t " << getWeightsSymbol(model, "start")
+  if (application.hasPackedWeights) {
+    os << "extern const uint8_t " << getWeightsSymbol(application, "start")
        << "[];\n";
-    os << "extern const uint8_t " << getWeightsSymbol(model, "end")
+    os << "extern const uint8_t " << getWeightsSymbol(application, "end")
        << "[];\n";
-    os << "extern const uint8_t " << getWeightsSymbol(model, "size")
+    os << "extern const uint8_t " << getWeightsSymbol(application, "size")
        << "[];\n";
   }
-  for (const GeneratedL2Global &global : model.l2Globals) {
+  for (const GeneratedL2Global &global : application.l2Globals) {
     if (global.isConstant)
       continue;
     os << "extern uint8_t " << getL2GlobalSymbol(global) << "["
@@ -111,12 +111,12 @@ static void emitL2GlobalDeclarations(const MagiaApplicationDescription &model,
   os << "void maps_application_init_l2_data(uint32_t seed);\n\n";
   os << "static inline void maps_application_init_tensors(uint32_t hartid) {\n";
   os << "  if (hartid == 0u) {\n";
-  if (model.hasPackedWeights) {
-    os << "    if ((((uintptr_t)" << getWeightsSymbol(model, "start")
-       << ") & " << (model.weightsAlignment - 1) << "u) != 0u ||\n";
-    os << "        (uintptr_t)" << getWeightsSymbol(model, "end")
-       << " - (uintptr_t)" << getWeightsSymbol(model, "start") << " != "
-       << model.weightsSize << "u)\n";
+  if (application.hasPackedWeights) {
+    os << "    if ((((uintptr_t)" << getWeightsSymbol(application, "start")
+       << ") & " << (application.weightsAlignment - 1) << "u) != 0u ||\n";
+    os << "        (uintptr_t)" << getWeightsSymbol(application, "end")
+       << " - (uintptr_t)" << getWeightsSymbol(application, "start") << " != "
+       << application.weightsSize << "u)\n";
     os << "      maps_trap();\n";
   }
   os << "    maps_application_init_l2_data(0x1234u);\n";
@@ -254,10 +254,10 @@ static void emitSliceDesc(const GeneratedSlice &slice,
   os << "  }";
 }
 
-static void emitSubsliceDesc(const MagiaApplicationDescription &model,
+static void emitSubsliceDesc(const MagiaApplicationDescription &application,
                              const GeneratedSubslice &subslice,
                              llvm::raw_ostream &os) {
-  const GeneratedSlice &slice = model.slices[subslice.sliceIndex];
+  const GeneratedSlice &slice = application.slices[subslice.sliceIndex];
 
   os << "{\n";
   os << "      .slice_id = " << slice.sliceId << ",\n";
@@ -292,23 +292,23 @@ static void emitTensorSubSlice(ArrayRef<int64_t> shape,
   os << "    }";
 }
 
-static void emitL2ReadDesc(const MagiaApplicationDescription &model,
+static void emitL2ReadDesc(const MagiaApplicationDescription &application,
                            const GeneratedL2Read &read,
                            llvm::raw_ostream &os) {
-  const GeneratedL2Global &global = model.l2Globals[read.l2GlobalIndex];
-  const GeneratedSubslice &dst = model.subslices[read.dstSubsliceIndex];
+  const GeneratedL2Global &global = application.l2Globals[read.l2GlobalIndex];
+  const GeneratedSubslice &dst = application.subslices[read.dstSubsliceIndex];
 
   os << "  {\n";
   os << "    .global_id = " << global.globalId << ",\n";
   os << "    .global_kind = " << getGlobalKindName(global.globalKind) << ",\n";
   os << "    .src_l2_addr = (uint32_t)";
   uint64_t srcOffset = read.srcL2Address - global.l2Address;
-  emitL2GlobalAddress(model, global, srcOffset, os);
+  emitL2GlobalAddress(application, global, srcOffset, os);
   os << ",\n";
   os << "    .src_l2_token_stride_bytes = "
      << read.srcL2TokenStrideBytes << ",\n";
   os << "    .dst = ";
-  emitSubsliceDesc(model, dst, os);
+  emitSubsliceDesc(application, dst, os);
   os << ",\n";
   os << "    .copy_src = ";
   emitTensorSubSlice(dst.shape, global.stridesBytes, os);
@@ -319,37 +319,37 @@ static void emitL2ReadDesc(const MagiaApplicationDescription &model,
   os << "  }";
 }
 
-static void emitRecvDesc(const MagiaApplicationDescription &model,
+static void emitRecvDesc(const MagiaApplicationDescription &application,
                          const GeneratedRecv &recv,
                          llvm::raw_ostream &os) {
-  const GeneratedSubslice &dst = model.subslices[recv.dstSubsliceIndex];
+  const GeneratedSubslice &dst = application.subslices[recv.dstSubsliceIndex];
 
   os << "  {\n";
   os << "    .transition_id = " << recv.transitionId << ",\n";
   os << "    .src_hartid = " << recv.srcHartid << ",\n";
   os << "    .dst_hartid = " << recv.dstHartid << ",\n";
   os << "    .dst = ";
-  emitSubsliceDesc(model, dst, os);
+  emitSubsliceDesc(application, dst, os);
   os << ",\n";
   os << "    .producer_idx = " << recv.producerIdx << ",\n";
   os << "  }";
 }
 
-static void emitSendDesc(const MagiaApplicationDescription &model,
+static void emitSendDesc(const MagiaApplicationDescription &application,
                          const GeneratedSend &send,
                          llvm::raw_ostream &os) {
-  const GeneratedSubslice &src = model.subslices[send.srcSubsliceIndex];
-  const GeneratedSubslice &dst = model.subslices[send.dstSubsliceIndex];
+  const GeneratedSubslice &src = application.subslices[send.srcSubsliceIndex];
+  const GeneratedSubslice &dst = application.subslices[send.dstSubsliceIndex];
 
   os << "  {\n";
   os << "    .transition_id = " << send.transitionId << ",\n";
   os << "    .src_hartid = " << send.srcHartid << ",\n";
   os << "    .dst_hartid = " << send.dstHartid << ",\n";
   os << "    .src = ";
-  emitSubsliceDesc(model, src, os);
+  emitSubsliceDesc(application, src, os);
   os << ",\n";
   os << "    .dst = ";
-  emitSubsliceDesc(model, dst, os);
+  emitSubsliceDesc(application, dst, os);
   os << ",\n";
   os << "    .dst_l1_data_base = " << send.dstL1DataBase << ",\n";
   os << "    .dst_slice_l1_offset_bytes = "
@@ -365,7 +365,7 @@ static void emitSendDesc(const MagiaApplicationDescription &model,
   os << "  }";
 }
 
-static void emitSubsliceArray(const MagiaApplicationDescription &model,
+static void emitSubsliceArray(const MagiaApplicationDescription &application,
                               ArrayRef<unsigned> subsliceIndices,
                               unsigned paddedSize,
                               llvm::raw_ostream &os) {
@@ -374,7 +374,7 @@ static void emitSubsliceArray(const MagiaApplicationDescription &model,
     if (i != 0)
       os << ", ";
     if (i < subsliceIndices.size())
-      emitSubsliceDesc(model, model.subslices[subsliceIndices[i]], os);
+      emitSubsliceDesc(application, application.subslices[subsliceIndices[i]], os);
     else
       os << "{0}";
   }
@@ -388,10 +388,10 @@ static CollectiveKey getCollectiveKey(const GeneratedOp &op) {
           op.collectiveIdentity.groupId};
 }
 
-static unsigned getCollectiveFlagBase(const MagiaApplicationDescription &model,
+static unsigned getCollectiveFlagBase(const MagiaApplicationDescription &application,
                                       const GeneratedOp &target) {
   std::map<CollectiveKey, const GeneratedOp *> collectives;
-  for (const GeneratedOp &op : model.ops)
+  for (const GeneratedOp &op : application.ops)
     if (op.isCollective)
       collectives.try_emplace(getCollectiveKey(op), &op);
 
@@ -399,83 +399,83 @@ static unsigned getCollectiveFlagBase(const MagiaApplicationDescription &model,
   for (const auto &[key, op] : collectives) {
     if (key == getCollectiveKey(target))
       return flagBase;
-    flagBase += 2 * model.numTokenSlots * op->collectiveParticipants.size();
+    flagBase += 2 * application.numTokenSlots * op->collectiveParticipants.size();
   }
   llvm_unreachable("collective operation has no stable flag allocation");
 }
 
 static const GeneratedOp &getParticipantCollectiveOp(
-    const MagiaApplicationDescription &model, const GeneratedOp &target,
+    const MagiaApplicationDescription &application, const GeneratedOp &target,
     unsigned participantHartid) {
-  for (const GeneratedOp &op : model.ops)
+  for (const GeneratedOp &op : application.ops)
     if (op.isCollective && op.ownerHartid == participantHartid &&
         getCollectiveKey(op) == getCollectiveKey(target))
       return op;
   llvm_unreachable("collective participant has no operation descriptor");
 }
 
-static uint64_t getSubsliceL1Offset(const MagiaApplicationDescription &model,
+static uint64_t getSubsliceL1Offset(const MagiaApplicationDescription &application,
                                     unsigned subsliceIndex) {
-  const GeneratedSubslice &subslice = model.subslices[subsliceIndex];
-  const GeneratedSlice &slice = model.slices[subslice.sliceIndex];
+  const GeneratedSubslice &subslice = application.subslices[subsliceIndex];
+  const GeneratedSlice &slice = application.slices[subslice.sliceIndex];
   return slice.l1OffsetBytes +
          computeOffsetBytes(subslice.offset, subslice.stridesBytes);
 }
 
-static uint64_t getFifoSlotDataSize(const MagiaApplicationDescription &model,
+static uint64_t getFifoSlotDataSize(const MagiaApplicationDescription &application,
                                     const GeneratedTilePlan &plan);
 
-static void emitL1DataBaseOffset(const MagiaApplicationDescription &model,
+static void emitL1DataBaseOffset(const MagiaApplicationDescription &application,
                                  int64_t hartid, llvm::raw_ostream &os) {
-  const GeneratedTilePlan &plan = model.tilePlans.find(hartid)->second;
-  const uint64_t slotDataSize = getFifoSlotDataSize(model, plan);
+  const GeneratedTilePlan &plan = application.tilePlans.find(hartid)->second;
+  const uint64_t slotDataSize = getFifoSlotDataSize(application, plan);
   os << "FIFO_HEADER_SIZE + " << plan.recvIndices.size()
      << "u * FIFO_RING_STATE_SIZE + " << plan.recvIndices.size()
      << "u * MAPS_NUM_TOKEN_SLOTS * (FIFO_SLOT_META_SIZE + (("
      << slotDataSize << "u + 3u) & ~3u))";
 }
 
-static void emitOpDesc(const MagiaApplicationDescription &model,
+static void emitOpDesc(const MagiaApplicationDescription &application,
                        const GeneratedOp &op,
                        llvm::raw_ostream &os) {
   os << "  {\n";
   os << "    .kind = " << getOpKindName(op.kind) << ",\n";
   os << "    .num_inputs = " << op.inputSubsliceIndices.size() << "u,\n";
   os << "    .inputs = ";
-  emitSubsliceArray(model, op.inputSubsliceIndices, 4, os);
+  emitSubsliceArray(application, op.inputSubsliceIndices, 4, os);
   os << ",\n";
   os << "    .num_outputs = " << op.outputSubsliceIndices.size() << "u,\n";
   os << "    .outputs = ";
-  emitSubsliceArray(model, op.outputSubsliceIndices, 2, os);
+  emitSubsliceArray(application, op.outputSubsliceIndices, 2, os);
   os << ",\n";
   if (op.isCollective) {
     os << "    .collective = {.stage_id = " << op.collectiveIdentity.stageId
        << "u, .layer_index = " << op.collectiveIdentity.layerIndex
        << "u, .group_id = " << op.collectiveIdentity.groupId
-       << "u, .flag_base = " << getCollectiveFlagBase(model, op)
-       << "u, .num_token_slots = " << model.numTokenSlots
+       << "u, .flag_base = " << getCollectiveFlagBase(application, op)
+       << "u, .num_token_slots = " << application.numTokenSlots
        << "u, .num_participants = " << op.collectiveParticipants.size()
        << "u, .participants = {";
     for (auto participant : llvm::enumerate(op.collectiveParticipants)) {
       if (participant.index() != 0)
         os << ", ";
       const GeneratedOp &participantOp = getParticipantCollectiveOp(
-          model, op, participant.value());
+          application, op, participant.value());
       const GeneratedSubslice &input =
-          model.subslices[participantOp.inputSubsliceIndices.front()];
+          application.subslices[participantOp.inputSubsliceIndices.front()];
       const GeneratedSubslice &output =
-          model.subslices[participantOp.outputSubsliceIndices.front()];
-      const GeneratedSlice &inputSlice = model.slices[input.sliceIndex];
-      const GeneratedSlice &outputSlice = model.slices[output.sliceIndex];
+          application.subslices[participantOp.outputSubsliceIndices.front()];
+      const GeneratedSlice &inputSlice = application.slices[input.sliceIndex];
+      const GeneratedSlice &outputSlice = application.slices[output.sliceIndex];
       os << "{.hartid = " << participant.value()
          << "u, .l1_data_base_offset = ";
-      emitL1DataBaseOffset(model, participant.value(), os);
+      emitL1DataBaseOffset(application, participant.value(), os);
       os << ", .input_l1_offset_bytes = "
-         << getSubsliceL1Offset(model,
+         << getSubsliceL1Offset(application,
                                 participantOp.inputSubsliceIndices.front())
          << "u, .input_slot_bytes = " << inputSlice.slotBytes
          << "u, .output_l1_offset_bytes = "
-         << getSubsliceL1Offset(model,
+         << getSubsliceL1Offset(application,
                                 participantOp.outputSubsliceIndices.front())
          << "u, .output_slot_bytes = " << outputSlice.slotBytes << "u}";
     }
@@ -491,17 +491,17 @@ static void emitOpDesc(const MagiaApplicationDescription &model,
   os << "  }";
 }
 
-static void emitL2WriteDesc(const MagiaApplicationDescription &model,
+static void emitL2WriteDesc(const MagiaApplicationDescription &application,
                             const GeneratedL2Write &write,
                             llvm::raw_ostream &os) {
-  const GeneratedL2Global &global = model.l2Globals[write.l2GlobalIndex];
-  const GeneratedSubslice &src = model.subslices[write.srcSubsliceIndex];
+  const GeneratedL2Global &global = application.l2Globals[write.l2GlobalIndex];
+  const GeneratedSubslice &src = application.subslices[write.srcSubsliceIndex];
 
   os << "  {\n";
   os << "    .global_id = " << global.globalId << ",\n";
   os << "    .global_kind = " << getGlobalKindName(global.globalKind) << ",\n";
   os << "    .src = ";
-  emitSubsliceDesc(model, src, os);
+  emitSubsliceDesc(application, src, os);
   os << ",\n";
   os << "    .dst_l2_addr = (uint32_t)" << getL2GlobalSymbol(global);
   uint64_t dstOffset = write.dstL2Address - global.l2Address;
@@ -519,26 +519,26 @@ static void emitL2WriteDesc(const MagiaApplicationDescription &model,
   os << "  }";
 }
 
-static void emitTileSliceDescriptors(const MagiaApplicationDescription &model,
+static void emitTileSliceDescriptors(const MagiaApplicationDescription &application,
                                      const GeneratedTilePlan &plan,
                                      llvm::raw_ostream &os) {
   os << "static const slice_desc_t maps_application_tile_"
      << plan.hartid << "_slices[] = {\n";
   for (unsigned sliceIndex : plan.sliceIndices) {
-    emitSliceDesc(model.slices[sliceIndex], os);
+    emitSliceDesc(application.slices[sliceIndex], os);
     os << ",\n";
   }
   os << "};\n\n";
 }
 
-static void emitTileL2ReadDescriptors(const MagiaApplicationDescription &model,
+static void emitTileL2ReadDescriptors(const MagiaApplicationDescription &application,
                                       const GeneratedTilePlan &plan,
                                       llvm::raw_ostream &os) {
   if (!plan.initL2ReadIndices.empty()) {
     os << "static const l2_read_desc_t maps_application_tile_"
        << plan.hartid << "_init_l2_reads[] = {\n";
     for (unsigned readIndex : plan.initL2ReadIndices) {
-      emitL2ReadDesc(model, model.l2Reads[readIndex], os);
+      emitL2ReadDesc(application, application.l2Reads[readIndex], os);
       os << ",\n";
     }
     os << "};\n\n";
@@ -548,14 +548,14 @@ static void emitTileL2ReadDescriptors(const MagiaApplicationDescription &model,
     os << "static const l2_read_desc_t maps_application_tile_"
        << plan.hartid << "_l2_reads[] = {\n";
     for (unsigned readIndex : plan.l2ReadIndices) {
-      emitL2ReadDesc(model, model.l2Reads[readIndex], os);
+      emitL2ReadDesc(application, application.l2Reads[readIndex], os);
       os << ",\n";
     }
     os << "};\n\n";
   }
 }
 
-static void emitTileRecvDescriptors(const MagiaApplicationDescription &model,
+static void emitTileRecvDescriptors(const MagiaApplicationDescription &application,
                                     const GeneratedTilePlan &plan,
                                     llvm::raw_ostream &os) {
   if (plan.recvIndices.empty())
@@ -564,13 +564,13 @@ static void emitTileRecvDescriptors(const MagiaApplicationDescription &model,
   os << "static const fifo_recv_desc_t maps_application_tile_"
      << plan.hartid << "_recvs[] = {\n";
   for (unsigned recvIndex : plan.recvIndices) {
-    emitRecvDesc(model, model.recvs[recvIndex], os);
+    emitRecvDesc(application, application.recvs[recvIndex], os);
     os << ",\n";
   }
   os << "};\n\n";
 }
 
-static void emitTileSendDescriptors(const MagiaApplicationDescription &model,
+static void emitTileSendDescriptors(const MagiaApplicationDescription &application,
                                     const GeneratedTilePlan &plan,
                                     llvm::raw_ostream &os) {
   if (plan.sendIndices.empty())
@@ -579,13 +579,13 @@ static void emitTileSendDescriptors(const MagiaApplicationDescription &model,
   os << "static const fifo_send_desc_t maps_application_tile_"
      << plan.hartid << "_sends[] = {\n";
   for (unsigned sendIndex : plan.sendIndices) {
-    emitSendDesc(model, model.sends[sendIndex], os);
+    emitSendDesc(application, application.sends[sendIndex], os);
     os << ",\n";
   }
   os << "};\n\n";
 }
 
-static void emitTileOpDescriptors(const MagiaApplicationDescription &model,
+static void emitTileOpDescriptors(const MagiaApplicationDescription &application,
                                   const GeneratedTilePlan &plan,
                                   llvm::raw_ostream &os) {
   if (plan.opIndices.empty())
@@ -594,13 +594,13 @@ static void emitTileOpDescriptors(const MagiaApplicationDescription &model,
   os << "static const op_desc_t maps_application_tile_"
      << plan.hartid << "_ops[] = {\n";
   for (unsigned opIndex : plan.opIndices) {
-    emitOpDesc(model, model.ops[opIndex], os);
+    emitOpDesc(application, application.ops[opIndex], os);
     os << ",\n";
   }
   os << "};\n\n";
 }
 
-static void emitTileL2WriteDescriptors(const MagiaApplicationDescription &model,
+static void emitTileL2WriteDescriptors(const MagiaApplicationDescription &application,
                                        const GeneratedTilePlan &plan,
                                        llvm::raw_ostream &os) {
   if (plan.l2WriteIndices.empty())
@@ -609,18 +609,18 @@ static void emitTileL2WriteDescriptors(const MagiaApplicationDescription &model,
   os << "static const l2_write_desc_t maps_application_tile_"
      << plan.hartid << "_l2_writes[] = {\n";
   for (unsigned writeIndex : plan.l2WriteIndices) {
-    emitL2WriteDesc(model, model.l2Writes[writeIndex], os);
+    emitL2WriteDesc(application, application.l2Writes[writeIndex], os);
     os << ",\n";
   }
   os << "};\n\n";
 }
 
-static uint64_t getFifoSlotDataSize(const MagiaApplicationDescription &model,
+static uint64_t getFifoSlotDataSize(const MagiaApplicationDescription &application,
                                     const GeneratedTilePlan &plan) {
   uint64_t maxBytes = 0;
   for (unsigned recvIndex : plan.recvIndices) {
-    const GeneratedRecv &recv = model.recvs[recvIndex];
-    const GeneratedSubslice &dst = model.subslices[recv.dstSubsliceIndex];
+    const GeneratedRecv &recv = application.recvs[recvIndex];
+    const GeneratedSubslice &dst = application.subslices[recv.dstSubsliceIndex];
     maxBytes = std::max(maxBytes, product(dst.shape) * dst.elemBytes);
   }
   return maxBytes;
@@ -649,11 +649,11 @@ static void emitPlanArrayAssignment(StringRef fieldName, StringRef arraySuffix,
 }
 
 static void emitApplicationDataDefinitions(
-    const MagiaApplicationDescription &model, llvm::raw_ostream &os) {
+    const MagiaApplicationDescription &application, llvm::raw_ostream &os) {
   os << "#include <stdint.h>\n";
   os << "#include <stddef.h>\n\n";
 
-  for (const GeneratedL2Global &global : model.l2Globals) {
+  for (const GeneratedL2Global &global : application.l2Globals) {
     if (global.isConstant)
       continue;
     os << "uint8_t " << getL2GlobalSymbol(global) << "["
@@ -661,7 +661,7 @@ static void emitApplicationDataDefinitions(
        << "] __attribute__((aligned(16)));\n";
   }
 
-  if (model.randomizeInputs) {
+  if (application.randomizeInputs) {
     os << "\nstatic uint32_t maps_application_lcg(uint32_t *state) {\n";
     os << "  *state = *state * 1664525u + 1013904223u;\n";
     os << "  return *state;\n";
@@ -673,7 +673,7 @@ static void emitApplicationDataDefinitions(
   os << "    dst[i] = 0u;\n";
   os << "}\n\n";
 
-  if (model.randomizeInputs) {
+  if (application.randomizeInputs) {
     os << "static void maps_application_fill_f16(uint8_t *dst, size_t bytes,\n";
     os << "                                    uint32_t *state) {\n";
     os << "  static const uint16_t values[] = {\n";
@@ -694,15 +694,15 @@ static void emitApplicationDataDefinitions(
   }
 
   os << "void maps_application_init_l2_data(uint32_t seed) {\n";
-  if (model.randomizeInputs)
+  if (application.randomizeInputs)
     os << "  uint32_t state = seed;\n";
   else
     os << "  (void)seed;\n";
-  for (const GeneratedL2Global &global : model.l2Globals) {
+  for (const GeneratedL2Global &global : application.l2Globals) {
     if (global.isConstant)
       continue;
     os << "\n";
-    if (model.randomizeInputs &&
+    if (application.randomizeInputs &&
         (global.globalKind == GeneratedGlobalKind::Input ||
          global.globalKind == GeneratedGlobalKind::Initializer)) {
       if (global.elemBytes == 2) {
@@ -785,65 +785,65 @@ static std::string emitWithApplicationSymbols(
   return text;
 }
 
-void emitApplicationHeader(const MagiaApplicationDescription &model,
+void emitApplicationHeader(const MagiaApplicationDescription &application,
                            llvm::raw_ostream &os) {
-  std::string guard = uppercase(model.outputStem) + "_H";
+  std::string guard = uppercase(application.outputStem) + "_H";
   os << "#ifndef " << guard << "\n";
   os << "#define " << guard << "\n\n";
   os << "#include <stdint.h>\n\n";
-  os << "#define " << uppercase(model.outputStem) << "_EXECUTION_TOKENS "
-     << model.numTokens << "u\n";
-  os << "#define " << uppercase(model.outputStem) << "_TOKEN_SLOTS "
-     << model.numTokenSlots << "u\n\n";
-  os << "int " << model.outputStem << "_run(void);\n";
-  os << "void " << model.outputStem << "_handle_input(uint32_t token);\n";
-  os << "void " << model.outputStem << "_handle_output(uint32_t token);\n\n";
-  for (const GeneratedL2Global &global : model.l2Globals) {
+  os << "#define " << uppercase(application.outputStem) << "_EXECUTION_TOKENS "
+     << application.numTokens << "u\n";
+  os << "#define " << uppercase(application.outputStem) << "_TOKEN_SLOTS "
+     << application.numTokenSlots << "u\n\n";
+  os << "int " << application.outputStem << "_run(void);\n";
+  os << "void " << application.outputStem << "_handle_input(uint32_t token);\n";
+  os << "void " << application.outputStem << "_handle_output(uint32_t token);\n\n";
+  for (const GeneratedL2Global &global : application.l2Globals) {
     if (global.globalKind == GeneratedGlobalKind::Input)
-      os << "uint8_t *" << model.outputStem << "_input_"
+      os << "uint8_t *" << application.outputStem << "_input_"
          << normalizeSnakeCase(global.globalName) << "(uint32_t token);\n";
     if (global.globalKind == GeneratedGlobalKind::Output)
-      os << "const uint8_t *" << model.outputStem << "_output_"
+      os << "const uint8_t *" << application.outputStem << "_output_"
          << normalizeSnakeCase(global.globalName) << "(uint32_t token);\n";
   }
   os << "\n#endif /* " << guard << " */\n";
 }
 
-void emitApplicationDataSource(const MagiaApplicationDescription &model,
+void emitApplicationDataSource(const MagiaApplicationDescription &application,
                                 llvm::raw_ostream &os) {
-  os << emitWithApplicationSymbols(model, [&](llvm::raw_ostream &stream) {
-    emitGeneratedPrelude(model, stream);
-    emitL2GlobalDeclarations(model, stream);
+  os << emitWithApplicationSymbols(application, [&](llvm::raw_ostream &stream) {
+    emitGeneratedPrelude(application, stream);
+    emitL2GlobalDeclarations(application, stream);
   });
   os << "\n";
   os << emitWithApplicationSymbols(
-      model, [&](llvm::raw_ostream &stream) { emitApplicationDataDefinitions(model, stream); });
+      application, [&](llvm::raw_ostream &stream) { emitApplicationDataDefinitions(application, stream); });
   os << "\n";
-  for (const GeneratedTilePlan *plan : getSortedTilePlans(model)) {
-    os << "extern uint32_t " << model.outputStem << "_build_tile_"
-       << getPaddedPhysicalTileId(model, plan->hartid) << "_plan(\n";
+  for (const GeneratedTilePlan *plan : getSortedTilePlans(application)) {
+    os << "extern uint32_t " << application.outputStem << "_build_tile_"
+       << getPaddedPhysicalTileId(application, plan->hartid) << "_plan(\n";
     os << "    fifo_tile_plan_t *plan,\n";
     os << "    maps_operation_runtime_t *runtime);\n";
   }
-  os << "\nvoid " << model.outputStem
+  os << "\nvoid " << application.outputStem
      << "_initialize_data(uint32_t hartid) {\n";
-  os << "  " << model.outputStem << "_init_tensors(hartid);\n";
+  os << "  " << application.outputStem << "_init_tensors(hartid);\n";
   os << "}\n\n";
-  os << "uint32_t " << model.outputStem << "_build_plan(\n";
+  os << "uint32_t " << application.outputStem << "_build_plan(\n";
   os << "    fifo_tile_plan_t *plan, uint32_t hartid,\n";
   os << "    maps_operation_runtime_t *runtime) {\n";
   os << "  switch (hartid) {\n";
-  for (const GeneratedTilePlan *plan : getSortedTilePlans(model)) {
-    std::string tileId = getPaddedPhysicalTileId(model, plan->hartid);
+  for (const GeneratedTilePlan *plan : getSortedTilePlans(application)) {
+    std::string tileId = getPaddedPhysicalTileId(application, plan->hartid);
     os << "  case " << plan->hartid << "u:\n";
-    os << "    return " << model.outputStem << "_build_tile_" << tileId
+    os << "    return " << application.outputStem << "_build_tile_" << tileId
        << "_plan(plan, runtime);\n";
   }
   os << "  default:\n";
   os << "    return 0u;\n";
   os << "  }\n";
   os << "}\n\n";
-  for (const GeneratedL2Global &global : model.l2Globals) {
+  for (const GeneratedL2Global &global : application.l2Globals) {
     if (global.globalKind != GeneratedGlobalKind::Input &&
         global.globalKind != GeneratedGlobalKind::Output)
       continue;
@@ -851,20 +851,20 @@ void emitApplicationDataSource(const MagiaApplicationDescription &model,
         global.globalKind == GeneratedGlobalKind::Input ? "input" : "output";
     if (global.globalKind == GeneratedGlobalKind::Output)
       os << "const ";
-    os << "uint8_t *" << model.outputStem << "_" << direction << "_"
+    os << "uint8_t *" << application.outputStem << "_" << direction << "_"
        << normalizeSnakeCase(global.globalName) << "(uint32_t token) {\n";
-    os << "  return " << model.outputStem << "_l2_global_" << global.descriptionIndex
+    os << "  return " << application.outputStem << "_l2_global_" << global.descriptionIndex
        << " + token * " << global.tokenStrideBytes << "u;\n";
     os << "}\n\n";
   }
 }
 
 static void emitApplicationTilePlanConstructor(
-    const MagiaApplicationDescription &model, const GeneratedTilePlan &plan,
+    const MagiaApplicationDescription &application, const GeneratedTilePlan &plan,
     llvm::raw_ostream &os) {
-  uint64_t fifoSlotDataSize = getFifoSlotDataSize(model, plan);
+  uint64_t fifoSlotDataSize = getFifoSlotDataSize(application, plan);
   os << "uint32_t maps_application_build_tile_"
-     << getPaddedPhysicalTileId(model, plan.hartid) << "_plan(\n";
+     << getPaddedPhysicalTileId(application, plan.hartid) << "_plan(\n";
   os << "    fifo_tile_plan_t *plan,\n";
   os << "    maps_operation_runtime_t *runtime) {\n";
   os << "  *plan = (fifo_tile_plan_t){\n";
@@ -902,38 +902,38 @@ static void emitApplicationTilePlanConstructor(
   os << "}\n";
 }
 
-void emitApplicationTileSource(const MagiaApplicationDescription &model,
+void emitApplicationTileSource(const MagiaApplicationDescription &application,
                                const GeneratedTilePlan &plan,
                                llvm::raw_ostream &os) {
-  os << emitWithApplicationSymbols(model, [&](llvm::raw_ostream &stream) {
-    emitGeneratedPrelude(model, stream);
-    emitL2GlobalDeclarations(model, stream);
-    emitTileSliceDescriptors(model, plan, stream);
-    emitTileL2ReadDescriptors(model, plan, stream);
-    emitTileRecvDescriptors(model, plan, stream);
-    emitTileOpDescriptors(model, plan, stream);
-    emitTileSendDescriptors(model, plan, stream);
-    emitTileL2WriteDescriptors(model, plan, stream);
+  os << emitWithApplicationSymbols(application, [&](llvm::raw_ostream &stream) {
+    emitGeneratedPrelude(application, stream);
+    emitL2GlobalDeclarations(application, stream);
+    emitTileSliceDescriptors(application, plan, stream);
+    emitTileL2ReadDescriptors(application, plan, stream);
+    emitTileRecvDescriptors(application, plan, stream);
+    emitTileOpDescriptors(application, plan, stream);
+    emitTileSendDescriptors(application, plan, stream);
+    emitTileL2WriteDescriptors(application, plan, stream);
     emitFifoStorageHelper(stream);
-    emitApplicationTilePlanConstructor(model, plan, stream);
+    emitApplicationTilePlanConstructor(application, plan, stream);
   });
 }
 
-void emitApplicationRunner(const MagiaApplicationDescription &model,
+void emitApplicationRunner(const MagiaApplicationDescription &application,
                            llvm::raw_ostream &os) {
-  os << "#include \"" << model.outputStem << ".h\"\n\n";
+  os << "#include \"" << application.outputStem << ".h\"\n\n";
   os << "#include \"fsync.h\"\n";
   os << "#include \"redmule.h\"\n";
   os << "#include \"tile.h\"\n";
   os << "#include \"utils/maps_operations.h\"\n";
   os << "#include \"utils/maps_utils_v2.h\"\n\n";
-  os << "#define " << uppercase(model.outputStem) << "_WAIT_MODE WFE\n\n";
-  os << "extern void " << model.outputStem
+  os << "#define " << uppercase(application.outputStem) << "_WAIT_MODE WFE\n\n";
+  os << "extern void " << application.outputStem
      << "_initialize_data(uint32_t hartid);\n";
-  os << "extern uint32_t " << model.outputStem << "_build_plan(\n";
+  os << "extern uint32_t " << application.outputStem << "_build_plan(\n";
   os << "    fifo_tile_plan_t *plan, uint32_t hartid,\n";
   os << "    maps_operation_runtime_t *runtime);\n\n";
-  os << "int " << model.outputStem << "_run(void) {\n";
+  os << "int " << application.outputStem << "_run(void) {\n";
   os << "  const uint32_t hartid = get_hartid();\n";
   os << "  idma_config_t idma_config = {.hartid = hartid};\n";
   os << "  idma_controller_t idma = {\n";
@@ -958,68 +958,68 @@ void emitApplicationRunner(const MagiaApplicationDescription &model,
   os << "  maps_operation_runtime_t runtime = {\n";
   os << "      .redmule_ctrl = &redmule, .eu_ctrl = &event_unit};\n";
   os << "  fifo_tile_plan_t plan;\n";
-  os << "  const uint32_t active = " << model.outputStem
+  os << "  const uint32_t active = " << application.outputStem
      << "_build_plan(&plan, hartid, &runtime);\n";
   os << "  if (active)\n";
   os << "    maps_fifo_init(&plan);\n\n";
   os << "  fsync_sync_level(&fsync, MAX_SYNC_LVL - 1, 0);\n";
-  os << "  eu_fsync_wait(&event_unit, " << uppercase(model.outputStem)
+  os << "  eu_fsync_wait(&event_unit, " << uppercase(application.outputStem)
      << "_WAIT_MODE);\n";
-  os << "  " << model.outputStem << "_initialize_data(hartid);\n";
+  os << "  " << application.outputStem << "_initialize_data(hartid);\n";
   os << "  if (hartid == 0u) {\n";
   os << "    for (uint32_t token = 0u; token < "
-     << uppercase(model.outputStem) << "_EXECUTION_TOKENS; ++token)\n";
-  os << "      " << model.outputStem << "_handle_input(token);\n";
+     << uppercase(application.outputStem) << "_EXECUTION_TOKENS; ++token)\n";
+  os << "      " << application.outputStem << "_handle_input(token);\n";
   os << "  }\n";
   os << "  fsync_sync_global(&fsync);\n";
-  os << "  eu_fsync_wait(&event_unit, " << uppercase(model.outputStem)
+  os << "  eu_fsync_wait(&event_unit, " << uppercase(application.outputStem)
      << "_WAIT_MODE);\n";
   os << "  if (active)\n";
   os << "    maps_fifo_init_tile(&plan, &idma, &event_unit);\n";
   os << "  fsync_sync_global(&fsync);\n";
-  os << "  eu_fsync_wait(&event_unit, " << uppercase(model.outputStem)
+  os << "  eu_fsync_wait(&event_unit, " << uppercase(application.outputStem)
      << "_WAIT_MODE);\n";
   os << "  if (active)\n";
   os << "    maps_fifo_run_tile_tokens(\n";
-  os << "        &plan, " << uppercase(model.outputStem)
+  os << "        &plan, " << uppercase(application.outputStem)
      << "_EXECUTION_TOKENS, &idma, &event_unit);\n";
   os << "  fsync_sync_global(&fsync);\n";
-  os << "  eu_fsync_wait(&event_unit, " << uppercase(model.outputStem)
+  os << "  eu_fsync_wait(&event_unit, " << uppercase(application.outputStem)
      << "_WAIT_MODE);\n";
   os << "  if (hartid == 0u) {\n";
   os << "    for (uint32_t token = 0u; token < "
-     << uppercase(model.outputStem) << "_EXECUTION_TOKENS; ++token)\n";
-  os << "      " << model.outputStem << "_handle_output(token);\n";
+     << uppercase(application.outputStem) << "_EXECUTION_TOKENS; ++token)\n";
+  os << "      " << application.outputStem << "_handle_output(token);\n";
   os << "  }\n";
   os << "  return 0;\n";
   os << "}\n\n";
-  os << "int main(void) { return " << model.outputStem << "_run(); }\n";
+  os << "int main(void) { return " << application.outputStem << "_run(); }\n";
 }
 
-void emitInitialApplicationSource(const MagiaApplicationDescription &model,
+void emitInitialApplicationSource(const MagiaApplicationDescription &application,
                                   llvm::raw_ostream &os) {
   os << "/* Only customize this source file. MAPS owns every other emitted "
         "file. */\n";
-  os << "#include \"" << model.outputStem << ".h\"\n\n";
+  os << "#include \"" << application.outputStem << ".h\"\n\n";
   os << "#include <stddef.h>\n";
   os << "#include \"utils/printf.h\"\n\n";
-  for (const GeneratedL2Global &global : model.l2Globals) {
+  for (const GeneratedL2Global &global : application.l2Globals) {
     if (global.runtimeInputFile.empty())
       continue;
     os << "extern const uint8_t "
-       << getRuntimeInputSymbol(model, global, "start") << "[];\n";
+       << getRuntimeInputSymbol(application, global, "start") << "[];\n";
   }
   os << "\n";
-  os << "void " << model.outputStem << "_handle_input(uint32_t token) {\n";
-  for (const GeneratedL2Global &global : model.l2Globals) {
+  os << "void " << application.outputStem << "_handle_input(uint32_t token) {\n";
+  for (const GeneratedL2Global &global : application.l2Globals) {
     if (global.globalKind != GeneratedGlobalKind::Input)
       continue;
     std::string name = normalizeSnakeCase(global.globalName);
-    os << "  uint8_t *" << name << " = " << model.outputStem << "_input_"
+    os << "  uint8_t *" << name << " = " << application.outputStem << "_input_"
        << name << "(token);\n";
     if (!global.runtimeInputFile.empty()) {
       os << "  const uint8_t *" << name << "_data = "
-         << getRuntimeInputSymbol(model, global, "start") << ";\n";
+         << getRuntimeInputSymbol(application, global, "start") << ";\n";
       os << "  for (size_t index = 0; index < " << global.tensorBytes
          << "u; ++index)\n";
       os << "    " << name << "[index] = " << name
@@ -1032,19 +1032,19 @@ void emitInitialApplicationSource(const MagiaApplicationDescription &model,
     }
   }
   os << "}\n\n";
-  os << "void " << model.outputStem << "_handle_output(uint32_t token) {\n";
-  for (const GeneratedL2Global &global : model.l2Globals) {
+  os << "void " << application.outputStem << "_handle_output(uint32_t token) {\n";
+  for (const GeneratedL2Global &global : application.l2Globals) {
     if (global.globalKind != GeneratedGlobalKind::Output)
       continue;
     std::string name = normalizeSnakeCase(global.globalName);
-    os << "  const uint8_t *" << name << " = " << model.outputStem << "_output_"
+    os << "  const uint8_t *" << name << " = " << application.outputStem << "_output_"
        << name << "(token);\n";
     os << "  uint32_t " << name << "_checksum = 2166136261u;\n";
     os << "  for (size_t index = 0; index < " << global.tensorBytes
        << "u; ++index)\n";
     os << "    " << name << "_checksum = (" << name << "_checksum ^ " << name
        << "[index]) * 16777619u;\n";
-    os << "  printf(\"" << model.outputStem << " token %u output "
+    os << "  printf(\"" << application.outputStem << " token %u output "
        << escapePrintfText(global.globalName)
        << " checksum: %08x\\n\", token, " << name
        << "_checksum);\n";
@@ -1052,72 +1052,72 @@ void emitInitialApplicationSource(const MagiaApplicationDescription &model,
   os << "}\n";
 }
 
-void emitApplicationCMake(const MagiaApplicationDescription &model,
+void emitApplicationCMake(const MagiaApplicationDescription &application,
                           llvm::raw_ostream &os) {
-  os << "set(MAPS_APPLICATION " << model.outputStem << ")\n\n";
-  os << "add_executable(" << model.outputStem << "\n";
+  os << "set(MAPS_APPLICATION " << application.outputStem << ")\n\n";
+  os << "add_executable(" << application.outputStem << "\n";
   os << "  src/application.c\n";
-  os << "  src/" << model.outputStem << ".c\n";
-  os << "  src/" << model.outputStem << "_runner.c\n";
-  for (const GeneratedTilePlan *plan : getSortedTilePlans(model))
-    os << "  src/tiles/" << getApplicationTileFilename(model, plan->hartid)
+  os << "  src/" << application.outputStem << ".c\n";
+  os << "  src/" << application.outputStem << "_runner.c\n";
+  for (const GeneratedTilePlan *plan : getSortedTilePlans(application))
+    os << "  src/tiles/" << getApplicationTileFilename(application, plan->hartid)
        << "\n";
   os << ")\n";
   os << "configure_file(\n";
-  os << "  src/" << model.outputStem << "_initializers.S.in\n";
-  os << "  ${CMAKE_CURRENT_BINARY_DIR}/" << model.outputStem
+  os << "  src/" << application.outputStem << "_initializers.S.in\n";
+  os << "  ${CMAKE_CURRENT_BINARY_DIR}/" << application.outputStem
      << "_initializers.S\n";
   os << "  @ONLY\n";
   os << ")\n";
-  os << "target_sources(" << model.outputStem
-     << " PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/" << model.outputStem
+  os << "target_sources(" << application.outputStem
+     << " PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/" << application.outputStem
      << "_initializers.S)\n";
-  os << "target_include_directories(" << model.outputStem
+  os << "target_include_directories(" << application.outputStem
      << " PUBLIC include)\n";
-  os << "target_compile_options(" << model.outputStem << " PRIVATE -O2)\n";
-  os << "target_link_libraries(" << model.outputStem
+  os << "target_compile_options(" << application.outputStem << " PRIVATE -O2)\n";
+  os << "target_link_libraries(" << application.outputStem
      << " PUBLIC runtime hal idma_lib redmule_lib fsync_lib eu_lib "
         "kernels_redmule kernels_generic)\n";
 }
 
-void emitApplicationReadme(const MagiaApplicationDescription &model,
+void emitApplicationReadme(const MagiaApplicationDescription &application,
                            llvm::raw_ostream &os) {
-  os << "# " << model.outputStem << "\n\n";
-  os << "Generated from `" << model.sourceModelName
-     << "` for the `magia-v2` Target and a " << model.meshWidth << " x "
-     << model.meshHeight << " planned Mesh.\n\n";
+  os << "# " << application.outputStem << "\n\n";
+  os << "Generated from `" << application.sourceModelName
+     << "` for the `magia-v2` Target and a " << application.meshWidth << " x "
+     << application.meshHeight << " planned Mesh.\n\n";
   os << "Copy this directory into the MAGIA SDK application/test tree. Add "
         "the following line to its parent `CMakeLists.txt`:\n\n";
-  os << "```cmake\nadd_subdirectory(" << model.outputStem << ")\n```\n\n";
+  os << "```cmake\nadd_subdirectory(" << application.outputStem << ")\n```\n\n";
   os << "Configure the SDK normally, then build this application with:\n\n";
-  os << "```sh\ncmake --build build --target " << model.outputStem
+  os << "```sh\ncmake --build build --target " << application.outputStem
      << "\n```\n\n";
   os << "Only `src/application.c` is developer-owned. Edit that file to "
         "replace the generated input and output hooks; all other files are "
         "generated by MAPS.\n";
 }
 
-void emitApplicationInitializersAssembly(const MagiaApplicationDescription &model,
+void emitApplicationInitializersAssembly(const MagiaApplicationDescription &application,
                                          llvm::raw_ostream &os) {
-  std::string start = model.outputStem + "_initializers_start";
-  std::string end = model.outputStem + "_initializers_end";
-  std::string size = model.outputStem + "_initializers_size";
+  std::string start = application.outputStem + "_initializers_start";
+  std::string end = application.outputStem + "_initializers_end";
+  std::string size = application.outputStem + "_initializers_size";
   os << ".section .maps_initializers,\"a\",@progbits\n";
-  os << ".balign " << model.weightsAlignment << "\n";
+  os << ".balign " << application.weightsAlignment << "\n";
   os << ".global " << start << "\n";
   os << ".global " << end << "\n";
   os << ".global " << size << "\n";
   os << start << ":\n";
-  os << ".incbin \"@CMAKE_CURRENT_SOURCE_DIR@/data/" << model.outputStem
+  os << ".incbin \"@CMAKE_CURRENT_SOURCE_DIR@/data/" << application.outputStem
      << ".initializers.bin\"\n";
   os << end << ":\n";
   os << ".set " << size << ", " << end << " - " << start << "\n";
-  for (const GeneratedL2Global &global : model.l2Globals) {
+  for (const GeneratedL2Global &global : application.l2Globals) {
     if (global.runtimeInputFile.empty())
       continue;
-    start = getRuntimeInputSymbol(model, global, "start");
-    end = getRuntimeInputSymbol(model, global, "end");
-    size = getRuntimeInputSymbol(model, global, "size");
+    start = getRuntimeInputSymbol(application, global, "start");
+    end = getRuntimeInputSymbol(application, global, "end");
+    size = getRuntimeInputSymbol(application, global, "size");
     os << "\n.section .maps_runtime_inputs,\"a\",@progbits\n";
     os << ".balign " << kGeneratedL2AlignmentBytes << "\n";
     os << ".global " << start << "\n";

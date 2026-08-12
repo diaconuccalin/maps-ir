@@ -109,27 +109,27 @@ A send operation in the init region that starts from src = -1. This is the encod
 }
 
 
-LogicalResult addL2ReadForSlice(MagiaApplicationDescription &model, unsigned sliceIndex,
+LogicalResult addL2ReadForSlice(MagiaApplicationDescription &application, unsigned sliceIndex,
                                 const L2SourceInfo &source,
                                 GeneratedGlobalKind globalKind,
                                 unsigned numTokens, bool isInitializerRead) {
   /*
   Create the L2 read descriptor for a slice
   */
-  GeneratedSlice &slice = model.slices[sliceIndex];
+  GeneratedSlice &slice = application.slices[sliceIndex];
 
   unsigned l2GlobalIndex = 0;
 
-  if (failed(getOrCreateL2Global(model, source.globalName, globalKind,
+  if (failed(getOrCreateL2Global(application, source.globalName, globalKind,
                                  source.globalType, numTokens,
                                  l2GlobalIndex, &source)))
     return failure();
   
   // create the subslice associated with the transition
   GeneratedSubslice dst = makeWholeSubslice(slice);
-  unsigned dstSubsliceIndex = addGeneratedSubslice(model, std::move(dst));
+  unsigned dstSubsliceIndex = addGeneratedSubslice(application, std::move(dst));
 
-  const GeneratedL2Global &global = model.l2Globals[l2GlobalIndex];
+  const GeneratedL2Global &global = application.l2Globals[l2GlobalIndex];
   
   // populate read descriptor
   GeneratedL2Read read;
@@ -139,9 +139,9 @@ LogicalResult addL2ReadForSlice(MagiaApplicationDescription &model, unsigned sli
   read.srcL2TokenStrideBytes = globalKind == GeneratedGlobalKind::Input ? global.tokenStrideBytes : 0;
   
   // add descriptor to plan
-  unsigned readIndex = addGeneratedL2Read(model, read);
-  noteTile(model, slice.ownerHartid);
-  GeneratedTilePlan &plan = model.tilePlans[slice.ownerHartid];
+  unsigned readIndex = addGeneratedL2Read(application, read);
+  noteTile(application, slice.ownerHartid);
+  GeneratedTilePlan &plan = application.tilePlans[slice.ownerHartid];
   
   // check if it's an initializer or input read
   if (isInitializerRead)
@@ -198,17 +198,17 @@ void collectOutputInsertOffsets(Operation *ContainerOp, llvm::StringMap<OutputIn
   });
 }
 
-LogicalResult addOutputL2Write(MagiaApplicationDescription &model, StringRef globalName,
+LogicalResult addOutputL2Write(MagiaApplicationDescription &application, StringRef globalName,
                                RankedTensorType outputGlobalType,
                                ArrayRef<int64_t> outputFullOffset,
                                unsigned srcSubsliceIndex, int64_t srcHartid) {
   unsigned l2GlobalIndex = 0;
-  if (failed(getOrCreateL2Global(model, globalName,
+  if (failed(getOrCreateL2Global(application, globalName,
                                  GeneratedGlobalKind::Output, outputGlobalType,
-                                 model.numTokens, l2GlobalIndex)))
+                                 application.numTokens, l2GlobalIndex)))
     return failure();
 
-  const GeneratedL2Global &global = model.l2Globals[l2GlobalIndex];
+  const GeneratedL2Global &global = application.l2Globals[l2GlobalIndex];
   GeneratedL2Write write;
   write.l2GlobalIndex = l2GlobalIndex;
   write.srcSubsliceIndex = srcSubsliceIndex;
@@ -217,9 +217,9 @@ LogicalResult addOutputL2Write(MagiaApplicationDescription &model, StringRef glo
                                             global.stridesBytes);
   write.dstL2TokenStrideBytes = global.tokenStrideBytes;
 
-  unsigned writeIndex = addGeneratedL2Write(model, write);
-  noteTile(model, srcHartid);
-  model.tilePlans[srcHartid].l2WriteIndices.push_back(writeIndex);
+  unsigned writeIndex = addGeneratedL2Write(application, write);
+  noteTile(application, srcHartid);
+  application.tilePlans[srcHartid].l2WriteIndices.push_back(writeIndex);
   return success();
 }
 

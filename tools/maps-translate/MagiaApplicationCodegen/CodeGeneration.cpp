@@ -189,11 +189,11 @@ applicationTensorEntry(const GeneratedL2Global &global) {
   return entry;
 }
 
-static LogicalResult writeApplicationManifest(const MagiaApplicationDescription &model,
+static LogicalResult writeApplicationManifest(const MagiaApplicationDescription &application,
                                               StringRef outputDirectory) {
   llvm::json::Array inputs;
   llvm::json::Array outputs;
-  for (const GeneratedL2Global &global : model.l2Globals) {
+  for (const GeneratedL2Global &global : application.l2Globals) {
     if (global.globalKind != GeneratedGlobalKind::Input &&
         global.globalKind != GeneratedGlobalKind::Output)
       continue;
@@ -208,12 +208,12 @@ static LogicalResult writeApplicationManifest(const MagiaApplicationDescription 
 
   llvm::json::Array activeTiles;
   uint64_t maxTileDataBytes = 0;
-  for (const GeneratedTilePlan *tilePlan : getSortedTilePlans(model)) {
+  for (const GeneratedTilePlan *tilePlan : getSortedTilePlans(application)) {
     activeTiles.push_back(tilePlan->hartid);
     maxTileDataBytes = std::max(maxTileDataBytes, tilePlan->l1DataBytes);
   }
 
-  std::string name = model.outputStem;
+  std::string name = application.outputStem;
   SmallVector<GeneratedArtifact> generatedArtifacts{
       {"CMakeLists.txt", "build_definition"},
       {"README.md", "integration_guide"},
@@ -223,12 +223,12 @@ static LogicalResult writeApplicationManifest(const MagiaApplicationDescription 
       {"src/" + name + "_initializers.S.in", "initializer_assembly"},
       {"data/" + name + ".initializers.bin", "initializer_data"},
   };
-  for (const GeneratedTilePlan *tilePlan : getSortedTilePlans(model))
+  for (const GeneratedTilePlan *tilePlan : getSortedTilePlans(application))
     generatedArtifacts.push_back(
         {"src/tiles/" +
-             getApplicationTileFilename(model, tilePlan->hartid),
+             getApplicationTileFilename(application, tilePlan->hartid),
          "tile_plan"});
-  for (const GeneratedL2Global &global : model.l2Globals)
+  for (const GeneratedL2Global &global : application.l2Globals)
     if (!global.runtimeInputFile.empty())
       generatedArtifacts.push_back(
           {"data/" + global.runtimeInputAsset, "runtime_input_data"});
@@ -249,17 +249,17 @@ static LogicalResult writeApplicationManifest(const MagiaApplicationDescription 
       {"schema_version", 1},
       {"application",
        llvm::json::Object{{"name", name}, {"target", "magia-v2"}}},
-      {"source_model", model.sourceModelName},
-      {"planned_mesh", llvm::json::Object{{"width", model.meshWidth},
-                                          {"height", model.meshHeight}}},
+      {"source_model", application.sourceModelName},
+      {"planned_mesh", llvm::json::Object{{"width", application.meshWidth},
+                                          {"height", application.meshHeight}}},
       {"abi",
        llvm::json::Object{
            {"operation", kGeneratedOperationAbiVersion},
            {"descriptor", kGeneratedDescriptorAbiVersion},
        }},
       {"execution",
-       llvm::json::Object{{"tokens", model.numTokens},
-                          {"token_slots", model.numTokenSlots}}},
+       llvm::json::Object{{"tokens", application.numTokens},
+                          {"token_slots", application.numTokenSlots}}},
       {"active_physical_tiles", std::move(activeTiles)},
       {"tensors", llvm::json::Object{{"inputs", std::move(inputs)},
                                      {"outputs", std::move(outputs)}}},
@@ -271,9 +271,9 @@ static LogicalResult writeApplicationManifest(const MagiaApplicationDescription 
        }},
       {"memory",
        llvm::json::Object{
-           {"initializers_bytes", static_cast<int64_t>(model.weightsSize)},
+           {"initializers_bytes", static_cast<int64_t>(application.weightsSize)},
            {"required_l2_bytes",
-            static_cast<int64_t>(model.nextL2Address - model.l2Base)},
+            static_cast<int64_t>(application.nextL2Address - application.l2Base)},
            {"max_tile_l1_bytes", static_cast<int64_t>(maxTileDataBytes)},
        }},
       {"files", llvm::json::Object{{"generated", std::move(*generatedFiles)},
@@ -287,10 +287,10 @@ static LogicalResult writeApplicationManifest(const MagiaApplicationDescription 
       [&](llvm::raw_ostream &os) { os << manifestText; });
 }
 
-static LogicalResult configureRuntimeInputs(MagiaApplicationDescription &model) {
+static LogicalResult configureRuntimeInputs(MagiaApplicationDescription &application) {
   llvm::StringMap<GeneratedL2Global *> inputs;
   llvm::StringSet<> normalizedNames;
-  for (GeneratedL2Global &global : model.l2Globals) {
+  for (GeneratedL2Global &global : application.l2Globals) {
     if (global.globalKind != GeneratedGlobalKind::Input)
       continue;
     if (!normalizedNames.insert(normalizeSnakeCase(global.globalName)).second) {
@@ -312,31 +312,36 @@ static LogicalResult configureRuntimeInputs(MagiaApplicationDescription &model) 
         path, /*IsText=*/false, /*RequiresNullTerminator=*/false);
     if (!contentsOrError ||
         (*contentsOrError)->getBufferSize() !=
-            found->second->tensorBytes * model.numTokens) {
+            found->second->tensorBytes * application.numTokens) {
       llvm::errs() << "invalid Runtime Input data for '" << name << "'\n";
       return failure();
     }
     found->second->runtimeInputFile = path.str();
     found->second->runtimeInputAsset =
-        model.outputStem + ".input_" + normalizeSnakeCase(name) + ".bin";
+        application.outputStem + ".input_" + normalizeSnakeCase(name) + ".bin";
   }
   return success();
 }
 
 LogicalResult generateMagiaApplication(ModuleOp module,
                                        StringRef outputDirectory) {
-  MagiaApplicationDescription model;
-  configureGeneratedRuntime(model);
-  model.outputStem = normalizeSnakeCase(model.outputStem);
-  if (model.l2End <= model.l2Base ||
-      failed(collectMagiaApplicationDescription(module, model)) ||
-      model.sourceModelName.empty() || model.meshWidth == 0 ||
-      model.meshHeight == 0 || !model.hasPackedWeights || model.numTokens == 0 ||
-      failed(configureRuntimeInputs(model)))
+  if (llvm::sys::fs::exists(outputDirectory)) {
+    llvm::errs() << "application output already exists: " << outputDirectory
+                 << "\n";
+    return failure();
+  }
+  MagiaApplicationDescription application;
+  configureGeneratedRuntime(application);
+  application.outputStem = normalizeSnakeCase(application.outputStem);
+  if (application.l2End <= application.l2Base ||
+      failed(collectMagiaApplicationDescription(module, application)) ||
+      application.sourceModelName.empty() || application.meshWidth == 0 ||
+      application.meshHeight == 0 || !application.hasPackedWeights || application.numTokens == 0 ||
+      failed(configureRuntimeInputs(application)))
     return failure();
 
   StringRef sourceInitializers = magiaWeightsFile.empty()
-                                     ? StringRef(model.weightsFile)
+                                     ? StringRef(application.weightsFile)
                                      : StringRef(magiaWeightsFile);
   auto initializersOrError = llvm::MemoryBuffer::getFile(
       sourceInitializers, /*IsText=*/false, /*RequiresNullTerminator=*/false);
@@ -346,13 +351,13 @@ LogicalResult generateMagiaApplication(ModuleOp module,
     return failure();
   }
   StringRef initializers = (*initializersOrError)->getBuffer();
-  if (initializers.size() != model.weightsSize) {
+  if (initializers.size() != application.weightsSize) {
     llvm::errs() << "packed Initializers size mismatch: expected "
-                 << model.weightsSize << " bytes, found " << initializers.size()
+                 << application.weightsSize << " bytes, found " << initializers.size()
                  << "\n";
     return failure();
   }
-  if (sha256(initializers) != model.weightsSha256) {
+  if (sha256(initializers) != application.weightsSha256) {
     llvm::errs() << "packed Initializers checksum mismatch\n";
     return failure();
   }
@@ -371,7 +376,7 @@ LogicalResult generateMagiaApplication(ModuleOp module,
     }
   }
 
-  std::string name = model.outputStem;
+  std::string name = application.outputStem;
   auto writeApplicationText =
       [&](StringRef path, llvm::function_ref<void(llvm::raw_ostream &)> emit) {
         return writeTextArtifact(applicationArtifactPath(outputDirectory, path),
@@ -379,34 +384,34 @@ LogicalResult generateMagiaApplication(ModuleOp module,
       };
   if (failed(writeApplicationText(
           "CMakeLists.txt",
-          [&](llvm::raw_ostream &os) { emitApplicationCMake(model, os); })) ||
+          [&](llvm::raw_ostream &os) { emitApplicationCMake(application, os); })) ||
       failed(writeApplicationText(
           "README.md",
-          [&](llvm::raw_ostream &os) { emitApplicationReadme(model, os); })) ||
+          [&](llvm::raw_ostream &os) { emitApplicationReadme(application, os); })) ||
       failed(writeApplicationText(
           "include/" + name + ".h",
-          [&](llvm::raw_ostream &os) { emitApplicationHeader(model, os); })) ||
+          [&](llvm::raw_ostream &os) { emitApplicationHeader(application, os); })) ||
       failed(writeApplicationText("src/" + name + ".c",
                                   [&](llvm::raw_ostream &os) {
-                                    emitApplicationDataSource(model, os);
+                                    emitApplicationDataSource(application, os);
                                   })) ||
       failed(writeApplicationText(
           "src/" + name + "_runner.c",
-          [&](llvm::raw_ostream &os) { emitApplicationRunner(model, os); })) ||
+          [&](llvm::raw_ostream &os) { emitApplicationRunner(application, os); })) ||
       failed(writeApplicationText("src/application.c",
                                   [&](llvm::raw_ostream &os) {
-                                    emitInitialApplicationSource(model, os);
+                                    emitInitialApplicationSource(application, os);
                                   })) ||
       failed(writeApplicationText(
           "src/" + name + "_initializers.S.in", [&](llvm::raw_ostream &os) {
-            emitApplicationInitializersAssembly(model, os);
+            emitApplicationInitializersAssembly(application, os);
           })))
     return failure();
-  for (const GeneratedTilePlan *tilePlan : getSortedTilePlans(model)) {
+  for (const GeneratedTilePlan *tilePlan : getSortedTilePlans(application)) {
     std::string path =
-        "src/tiles/" + getApplicationTileFilename(model, tilePlan->hartid);
+        "src/tiles/" + getApplicationTileFilename(application, tilePlan->hartid);
     if (failed(writeApplicationText(path, [&](llvm::raw_ostream &os) {
-          emitApplicationTileSource(model, *tilePlan, os);
+          emitApplicationTileSource(application, *tilePlan, os);
         })))
       return failure();
   }
@@ -415,7 +420,7 @@ LogicalResult generateMagiaApplication(ModuleOp module,
                               "data/" + name + ".initializers.bin"),
           initializers)))
     return failure();
-  for (const GeneratedL2Global &global : model.l2Globals) {
+  for (const GeneratedL2Global &global : application.l2Globals) {
     if (global.runtimeInputFile.empty())
       continue;
     auto inputOrError = llvm::MemoryBuffer::getFile(
@@ -428,7 +433,7 @@ LogicalResult generateMagiaApplication(ModuleOp module,
             (*inputOrError)->getBuffer())))
       return failure();
   }
-  if (failed(writeApplicationManifest(model, outputDirectory)))
+  if (failed(writeApplicationManifest(application, outputDirectory)))
     return failure();
   return success();
 }

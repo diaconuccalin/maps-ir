@@ -28,14 +28,14 @@ GeneratedSubslice makeSubsliceFromAttr(const GeneratedSlice &slice,
 }
 
 
-unsigned addWholeSubsliceForSlice(MagiaApplicationDescription &model, unsigned sliceIndex) {
+unsigned addWholeSubsliceForSlice(MagiaApplicationDescription &application, unsigned sliceIndex) {
   // Add a subslice that covers the entire generated slice
-  return addGeneratedSubslice(model, makeWholeSubslice(model.slices[sliceIndex]));
+  return addGeneratedSubslice(application, makeWholeSubslice(application.slices[sliceIndex]));
 }
 
 
 unsigned getOrCreateProducedSlice(
-    MagiaApplicationDescription &model, llvm::StringMap<unsigned> &producedSliceIndices,
+    MagiaApplicationDescription &application, llvm::StringMap<unsigned> &producedSliceIndices,
     StringRef uniqueKey, StringRef globalName, GeneratedGlobalKind kind,
     int64_t ownerHartid, RankedTensorType tensorType,
     ArrayRef<int64_t> fullOffset) {
@@ -60,13 +60,13 @@ unsigned getOrCreateProducedSlice(
     return std::numeric_limits<unsigned>::max();
 
   // Runtime produced slices are token-buffered
-  slice.numSlots = model.numTokenSlots;
+  slice.numSlots = application.numTokenSlots;
   slice.stridesBytes =
       computeContiguousStridesBytes(slice.shape, slice.elemBytes);
 
-  // Add the slice to the model and allocate it in the owner's L1
-  unsigned sliceIndex = addGeneratedSlice(model, std::move(slice));
-  if (failed(allocateSliceInTileL1(model, sliceIndex)))
+  // Add the slice to the application and allocate it in the owner's L1
+  unsigned sliceIndex = addGeneratedSlice(application, std::move(slice));
+  if (failed(allocateSliceInTileL1(application, sliceIndex)))
     return std::numeric_limits<unsigned>::max();
 
   // Remember the slice so later users of the same produced value can reuse it
@@ -77,7 +77,7 @@ unsigned getOrCreateProducedSlice(
 
 LogicalResult collectInitializerStore(
     Operation *storeOp, const llvm::StringMap<L2SourceInfo> &sources,
-    MagiaApplicationDescription &model) {
+    MagiaApplicationDescription &application) {
 
   /*
   Add L2 read descriptor for initializer data
@@ -132,19 +132,19 @@ LogicalResult collectInitializerStore(
   slice.stridesBytes = computeContiguousStridesBytes(slice.shape, slice.elemBytes);
 
   // add slice to plan and allocate the space in tile's L1
-  unsigned sliceIndex = addGeneratedSlice(model, std::move(slice));
-  if (failed(allocateSliceInTileL1(model, sliceIndex)))
+  unsigned sliceIndex = addGeneratedSlice(application, std::move(slice));
+  if (failed(allocateSliceInTileL1(application, sliceIndex)))
     return failure();
 
   std::string slot = getFlatSymbolAttr(storeOp, "slot");
   if (!slot.empty())
-    model.initializerSliceIndices[getTileSlotKey(tileId.getInt(), slot)] = sliceIndex;
+    application.initializerSliceIndices[getTileSlotKey(tileId.getInt(), slot)] = sliceIndex;
 
-  return addL2ReadForSlice(model, sliceIndex, *sourceInfo, GeneratedGlobalKind::Initializer, 1, true);
+  return addL2ReadForSlice(application, sliceIndex, *sourceInfo, GeneratedGlobalKind::Initializer, 1, true);
 }
 
 
-LogicalResult collectInputRecv(Operation *recvOp, const llvm::StringMap<L2SourceInfo> &sources, RunCollectionState &state, MagiaApplicationDescription &model) {
+LogicalResult collectInputRecv(Operation *recvOp, const llvm::StringMap<L2SourceInfo> &sources, RunCollectionState &state, MagiaApplicationDescription &application) {
 
   // Find the tile which the recv operation belongs to
   Operation *tileOp = findParentNamed(recvOp, "maps.tile");
@@ -189,27 +189,27 @@ LogicalResult collectInputRecv(Operation *recvOp, const llvm::StringMap<L2Source
     return failure();
 
   // Runtime input slices are token-buffered
-  slice.numSlots = model.numTokenSlots;
+  slice.numSlots = application.numTokenSlots;
   slice.stridesBytes =
       computeContiguousStridesBytes(slice.shape, slice.elemBytes);
 
-  // Add the input slice to the model and allocate it in tile L1
-  unsigned sliceIndex = addGeneratedSlice(model, std::move(slice));
-  if (failed(allocateSliceInTileL1(model, sliceIndex)))
+  // Add the input slice to the application and allocate it in tile L1
+  unsigned sliceIndex = addGeneratedSlice(application, std::move(slice));
+  if (failed(allocateSliceInTileL1(application, sliceIndex)))
     return failure();
 
   // The recv result value refers to the whole input slice
-  unsigned subsliceIndex = addWholeSubsliceForSlice(model, sliceIndex);
+  unsigned subsliceIndex = addWholeSubsliceForSlice(application, sliceIndex);
   state.valueSubsliceIndices[recvOp->getResult(0)] = subsliceIndex;
 
   // Add the runtime L2 read descriptor for this input
-  return addL2ReadForSlice(model, sliceIndex, source->second,
-                           GeneratedGlobalKind::Input, model.numTokens,
+  return addL2ReadForSlice(application, sliceIndex, source->second,
+                           GeneratedGlobalKind::Input, application.numTokens,
                            false);
 }
 
 
-LogicalResult collectLoad(Operation *loadOp, RunCollectionState &state, MagiaApplicationDescription &model) {
+LogicalResult collectLoad(Operation *loadOp, RunCollectionState &state, MagiaApplicationDescription &application) {
   // Find the tile which the load operation belongs to
   Operation *tileOp = findParentNamed(loadOp, "maps.tile");
   if (!tileOp)
@@ -226,19 +226,19 @@ LogicalResult collectLoad(Operation *loadOp, RunCollectionState &state, MagiaApp
     return failure();
 
   // Look up the slice that was created for this tile-local initializer slot
-  auto slice = model.initializerSliceIndices.find(
+  auto slice = application.initializerSliceIndices.find(
       getTileSlotKey(tileId.getInt(), slot));
-  if (slice == model.initializerSliceIndices.end())
+  if (slice == application.initializerSliceIndices.end())
     return failure();
 
   // The load result value refers to the whole initializer slice
-  unsigned subsliceIndex = addWholeSubsliceForSlice(model, slice->second);
+  unsigned subsliceIndex = addWholeSubsliceForSlice(application, slice->second);
   state.valueSubsliceIndices[loadOp->getResult(0)] = subsliceIndex;
   return success();
 }
 
 
-LogicalResult collectExtractSliceAlias(Operation *op, RunCollectionState &state, MagiaApplicationDescription &model) {
+LogicalResult collectExtractSliceAlias(Operation *op, RunCollectionState &state, MagiaApplicationDescription &application) {
 
   // Ignore malformed extract_slice ops
   if (op->getNumOperands() == 0 || op->getNumResults() == 0)
@@ -249,8 +249,8 @@ LogicalResult collectExtractSliceAlias(Operation *op, RunCollectionState &state,
   if (source == state.valueSubsliceIndices.end())
     return success();
 
-  const GeneratedSubslice &sourceSubslice = model.subslices[source->second];
-  const GeneratedSlice &sourceSlice = model.slices[sourceSubslice.sliceIndex];
+  const GeneratedSubslice &sourceSubslice = application.subslices[source->second];
+  const GeneratedSlice &sourceSlice = application.slices[sourceSubslice.sliceIndex];
 
   // Create an alias subslice inside the same generated slice
   GeneratedSubslice alias;
@@ -262,13 +262,13 @@ LogicalResult collectExtractSliceAlias(Operation *op, RunCollectionState &state,
   alias.stridesBytes = sourceSlice.stridesBytes;
 
   // Associate the extract_slice result with the alias subslice
-  unsigned aliasIndex = addGeneratedSubslice(model, std::move(alias));
+  unsigned aliasIndex = addGeneratedSubslice(application, std::move(alias));
   state.valueSubsliceIndices[op->getResult(0)] = aliasIndex;
   return success();
 }
 
 
-LogicalResult collectInsertSliceAlias(Operation *op, RunCollectionState &state, MagiaApplicationDescription &model) {
+LogicalResult collectInsertSliceAlias(Operation *op, RunCollectionState &state, MagiaApplicationDescription &application) {
   // Ignore malformed insert_slice ops
   if (op->getNumOperands() < 2 || op->getNumResults() == 0)
     return success();
@@ -284,9 +284,9 @@ LogicalResult collectInsertSliceAlias(Operation *op, RunCollectionState &state, 
   unsigned existingSubsliceIndex =
       dest != state.valueSubsliceIndices.end() ? dest->second : source->second;
   const GeneratedSubslice &existingSubslice =
-      model.subslices[existingSubsliceIndex];
+      application.subslices[existingSubsliceIndex];
   unsigned wholeSubsliceIndex =
-      addWholeSubsliceForSlice(model, existingSubslice.sliceIndex);
+      addWholeSubsliceForSlice(application, existingSubslice.sliceIndex);
   state.valueSubsliceIndices[op->getResult(0)] = wholeSubsliceIndex;
   return success();
 }

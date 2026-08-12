@@ -11,7 +11,7 @@
 
 namespace mlir::maps {
 
-static LogicalResult collectTileRecv(Operation *recvOp, RunCollectionState &state, MagiaApplicationDescription &model) {
+static LogicalResult collectTileRecv(Operation *recvOp, RunCollectionState &state, MagiaApplicationDescription &application) {
   /*
   Collect tile-to-tile receives before walking sends.
   A send descriptor needs the destination tile's L1 address, so each recv
@@ -88,37 +88,37 @@ static LogicalResult collectTileRecv(Operation *recvOp, RunCollectionState &stat
 
     // Allocate the aggregate destination slice in the receiving tile's L1 and
     // remember it so later recvs for the same region reuse the same buffer.
-    slice.numSlots = model.numTokenSlots;
+    slice.numSlots = application.numTokenSlots;
     slice.stridesBytes = computeContiguousStridesBytes(slice.shape, slice.elemBytes);
 
-    dstSliceIndex = addGeneratedSlice(model, std::move(slice));
+    dstSliceIndex = addGeneratedSlice(application, std::move(slice));
 
     // Check for enough l1 space
-    if (failed(allocateSliceInTileL1(model, dstSliceIndex)))
+    if (failed(allocateSliceInTileL1(application, dstSliceIndex)))
       return failure();
 
     state.aggregateSliceIndices[aggregateKey] = dstSliceIndex;
   }
 
-  GeneratedSlice &dstSlice = model.slices[dstSliceIndex];
+  GeneratedSlice &dstSlice = application.slices[dstSliceIndex];
 
   // The recv writes into this subslice of the aggregate destination slice.
   SmallVector<int64_t> dstSubslice = getDenseI64Array(recvOp, "dst_subslice");
-  unsigned dstSubsliceIndex = addGeneratedSubslice(model, makeSubsliceFromAttr(dstSlice, dstSubslice));
+  unsigned dstSubsliceIndex = addGeneratedSubslice(application, makeSubsliceFromAttr(dstSlice, dstSubslice));
 
   // Populate
   GeneratedRecv recv;
-  recv.transitionId = getOrCreateTransitionId(model, channel);
+  recv.transitionId = getOrCreateTransitionId(application, channel);
   recv.srcHartid = srcHartid.getInt();
   recv.dstHartid = dstHartid.getInt();
   recv.dstSubsliceIndex = dstSubsliceIndex;
-  noteTile(model, recv.dstHartid);
+  noteTile(application, recv.dstHartid);
   // FIFO rings are destination-local and single-producer.  Each MAPS
   // transition therefore receives a compact, stable sub-ring index.
-  recv.producerIdx = model.tilePlans[recv.dstHartid].recvIndices.size();
+  recv.producerIdx = application.tilePlans[recv.dstHartid].recvIndices.size();
 
-  unsigned recvIndex = addGeneratedRecv(model, recv);
-  model.tilePlans[recv.dstHartid].recvIndices.push_back(recvIndex);
+  unsigned recvIndex = addGeneratedRecv(application, recv);
+  application.tilePlans[recv.dstHartid].recvIndices.push_back(recvIndex);
 
   // Remember the destination endpoint for the matching send and for later users
   // of the recv result value.
@@ -130,7 +130,7 @@ static LogicalResult collectTileRecv(Operation *recvOp, RunCollectionState &stat
 }
 
 
-LogicalResult collectTileRecvs(Operation *runOp, RunCollectionState &state, MagiaApplicationDescription &model) {
+LogicalResult collectTileRecvs(Operation *runOp, RunCollectionState &state, MagiaApplicationDescription &application) {
   /*
     here we are trying to collect the following pattern types:
     %21 = maps.recv @transition_matmul_0_to_log_0_matmul_out_from_tile49_to_tile21 {dst_hartid = 21 : i64, dst_parent_slice = array<i64: 64, 64, 39, 13>, 
@@ -142,7 +142,7 @@ LogicalResult collectTileRecvs(Operation *runOp, RunCollectionState &state, Magi
     if (op->getName().getStringRef() != "maps.recv")
       return WalkResult::advance();
 
-    if (failed(collectTileRecv(op, state, model)))
+    if (failed(collectTileRecv(op, state, application)))
       return WalkResult::interrupt();
 
     return WalkResult::advance();
@@ -191,7 +191,7 @@ getProducedSliceSource(Operation *sendOp) {
 }
 
 LogicalResult collectProducedSend(Operation *sendOp, RunCollectionState &state,
-                                  MagiaApplicationDescription &model) {
+                                  MagiaApplicationDescription &application) {
   auto srcHartid = sendOp->getAttrOfType<IntegerAttr>("src_hartid");
   auto dstHartid = sendOp->getAttrOfType<IntegerAttr>("dst_hartid");
   if (!srcHartid || !dstHartid)
@@ -231,23 +231,23 @@ LogicalResult collectProducedSend(Operation *sendOp, RunCollectionState &state,
 
   auto existingSubslice = state.valueSubsliceIndices.find(source->rootValue);
   if (existingSubslice != state.valueSubsliceIndices.end()) {
-    srcSliceIndex = model.subslices[existingSubslice->second].sliceIndex;
+    srcSliceIndex = application.subslices[existingSubslice->second].sliceIndex;
     state.producedSliceIndices[uniqueKey] = srcSliceIndex;
   } else {
     srcSliceIndex = getOrCreateProducedSlice(
-        model, state.producedSliceIndices, uniqueKey, globalName, kind,
+        application, state.producedSliceIndices, uniqueKey, globalName, kind,
         srcHartid.getInt(), source->rootType, outputFullOffset);
     if (srcSliceIndex == std::numeric_limits<unsigned>::max())
       return failure();
   }
 
-  GeneratedSlice &srcSlice = model.slices[srcSliceIndex];
+  GeneratedSlice &srcSlice = application.slices[srcSliceIndex];
   SmallVector<int64_t> srcSubslice = getDenseI64Array(sendOp, "src_subslice");
   unsigned srcSubsliceIndex =
-      addGeneratedSubslice(model, makeSubsliceFromAttr(srcSlice, srcSubslice));
+      addGeneratedSubslice(application, makeSubsliceFromAttr(srcSlice, srcSubslice));
 
   if (dstHartid.getInt() == -1)
-    return addOutputL2Write(model, globalName, outputGlobalType,
+    return addOutputL2Write(application, globalName, outputGlobalType,
                             outputFullOffset, srcSubsliceIndex,
                             srcHartid.getInt());
 
@@ -255,9 +255,9 @@ LogicalResult collectProducedSend(Operation *sendOp, RunCollectionState &state,
   if (recvInfo == state.tileRecvs.end())
     return failure();
 
-  GeneratedSlice &dstSlice = model.slices[recvInfo->second.dstSliceIndex];
+  GeneratedSlice &dstSlice = application.slices[recvInfo->second.dstSliceIndex];
   GeneratedSend send;
-  send.transitionId = getOrCreateTransitionId(model, channel);
+  send.transitionId = getOrCreateTransitionId(application, channel);
   send.srcHartid = srcHartid.getInt();
   send.dstHartid = dstHartid.getInt();
   send.srcSubsliceIndex = srcSubsliceIndex;
@@ -267,9 +267,9 @@ LogicalResult collectProducedSend(Operation *sendOp, RunCollectionState &state,
   send.dstSliceSlotBytes = dstSlice.slotBytes;
   send.producerIdx = recvInfo->second.producerIdx;
 
-  unsigned sendIndex = addGeneratedSend(model, send);
-  noteTile(model, send.srcHartid);
-  model.tilePlans[send.srcHartid].sendIndices.push_back(sendIndex);
+  unsigned sendIndex = addGeneratedSend(application, send);
+  noteTile(application, send.srcHartid);
+  application.tilePlans[send.srcHartid].sendIndices.push_back(sendIndex);
   return success();
 }
 

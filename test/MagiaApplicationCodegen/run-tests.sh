@@ -115,6 +115,17 @@ second_application="${test_dir}/second-my-model-v1"
   -o "${second_application}"
 diff -r "${application}" "${second_application}"
 
+printf 'user customization\n' > "${application}/src/application.c"
+if "${code_generator}" "${test_dir}/sigmoid_with_inactive_tile.mlir" \
+    --target=magia-v2 \
+    --maps-magia-output-stem='My Model-v1' \
+    --maps-magia-weights-file="${source_initializers}" \
+    -o "${application}" 2>/dev/null; then
+  echo "expected existing application refusal" >&2
+  exit 1
+fi
+grep -qx 'user customization' "${application}/src/application.c"
+
 transition_application="${test_dir}/transitions"
 "${code_generator}" "${fixture_root}/two_tile_transitions.mlir" \
   --target=magia-v2 \

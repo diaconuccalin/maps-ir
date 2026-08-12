@@ -7,13 +7,13 @@ namespace mlir::maps {
 
 void collectL2Sources(Operation *regionOp,
                       llvm::StringMap<L2SourceInfo> &sources);
-LogicalResult addL2ReadForSlice(MagiaApplicationDescription &model, unsigned sliceIndex,
+LogicalResult addL2ReadForSlice(MagiaApplicationDescription &application, unsigned sliceIndex,
                                 const L2SourceInfo &source,
                                 GeneratedGlobalKind globalKind,
                                 unsigned numTokens, bool isInitializerRead);
 void collectOutputInsertOffsets(
     Operation *runOp, llvm::StringMap<OutputInsertInfo> &outputInserts);
-LogicalResult addOutputL2Write(MagiaApplicationDescription &model, StringRef globalName,
+LogicalResult addOutputL2Write(MagiaApplicationDescription &application, StringRef globalName,
                                RankedTensorType outputGlobalType,
                                ArrayRef<int64_t> outputFullOffset,
                                unsigned srcSubsliceIndex, int64_t srcHartid);

@@ -9,27 +9,27 @@ namespace mlir::maps {
 
 GeneratedSubslice makeSubsliceFromAttr(const GeneratedSlice &slice,
                                        ArrayRef<int64_t> sliceDims);
-unsigned addWholeSubsliceForSlice(MagiaApplicationDescription &model,
+unsigned addWholeSubsliceForSlice(MagiaApplicationDescription &application,
                                   unsigned sliceIndex);
 unsigned getOrCreateProducedSlice(
-    MagiaApplicationDescription &model, llvm::StringMap<unsigned> &producedSliceIndices,
+    MagiaApplicationDescription &application, llvm::StringMap<unsigned> &producedSliceIndices,
     StringRef uniqueKey, StringRef globalName, GeneratedGlobalKind kind,
     int64_t ownerHartid, RankedTensorType tensorType,
     ArrayRef<int64_t> fullOffset);
 
 LogicalResult collectInitializerStore(
     Operation *storeOp, const llvm::StringMap<L2SourceInfo> &sources,
-    MagiaApplicationDescription &model);
+    MagiaApplicationDescription &application);
 LogicalResult collectInputRecv(Operation *recvOp,
                                const llvm::StringMap<L2SourceInfo> &sources,
                                RunCollectionState &state,
-                               MagiaApplicationDescription &model);
+                               MagiaApplicationDescription &application);
 LogicalResult collectLoad(Operation *loadOp, RunCollectionState &state,
-                          MagiaApplicationDescription &model);
+                          MagiaApplicationDescription &application);
 LogicalResult collectExtractSliceAlias(Operation *op, RunCollectionState &state,
-                                       MagiaApplicationDescription &model);
+                                       MagiaApplicationDescription &application);
 LogicalResult collectInsertSliceAlias(Operation *op, RunCollectionState &state,
-                                      MagiaApplicationDescription &model);
+                                      MagiaApplicationDescription &application);
 
 } // namespace mlir::maps
 

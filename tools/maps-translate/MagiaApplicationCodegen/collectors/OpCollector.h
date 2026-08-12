@@ -6,7 +6,7 @@
 namespace mlir::maps {
 
 LogicalResult collectComputeOp(Operation *op, RunCollectionState &state,
-                               MagiaApplicationDescription &model);
+                               MagiaApplicationDescription &application);
 
 } // namespace mlir::maps
 

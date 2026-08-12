@@ -15,21 +15,21 @@
 namespace mlir::maps {
 
 static LogicalResult collectExecutionContract(ModuleOp module,
-                                              MagiaApplicationDescription &model) {
+                                              MagiaApplicationDescription &application) {
   auto numTokenSlots =
       module->getAttrOfType<IntegerAttr>("maps.num_token_slots");
   if (!numTokenSlots || numTokenSlots.getInt() <= 0 ||
       static_cast<uint64_t>(numTokenSlots.getInt()) >
           std::numeric_limits<unsigned>::max())
     return failure();
-  model.numTokenSlots = static_cast<unsigned>(numTokenSlots.getInt());
+  application.numTokenSlots = static_cast<unsigned>(numTokenSlots.getInt());
   return success();
 }
 
 static LogicalResult collectDeploymentIdentity(ModuleOp module,
-                                               MagiaApplicationDescription &model) {
+                                               MagiaApplicationDescription &application) {
   if (auto name = module->getAttrOfType<StringAttr>("maps.name"))
-    model.sourceModelName = name.getValue().str();
+    application.sourceModelName = name.getValue().str();
 
   auto meshWidth = module->getAttrOfType<IntegerAttr>("maps.mesh_width");
   auto meshHeight = module->getAttrOfType<IntegerAttr>("maps.mesh_height");
@@ -39,8 +39,8 @@ static LogicalResult collectDeploymentIdentity(ModuleOp module,
           std::numeric_limits<unsigned>::max() &&
       static_cast<uint64_t>(meshHeight.getInt()) <=
           std::numeric_limits<unsigned>::max()) {
-    model.meshWidth = static_cast<unsigned>(meshWidth.getInt());
-    model.meshHeight = static_cast<unsigned>(meshHeight.getInt());
+    application.meshWidth = static_cast<unsigned>(meshWidth.getInt());
+    application.meshHeight = static_cast<unsigned>(meshHeight.getInt());
   } else if (meshWidth || meshHeight) {
     return failure();
   }
@@ -48,7 +48,7 @@ static LogicalResult collectDeploymentIdentity(ModuleOp module,
 }
 
 static LogicalResult collectBundleMetadata(ModuleOp module,
-                                           MagiaApplicationDescription &model) {
+                                           MagiaApplicationDescription &application) {
   auto bundle = module->getAttrOfType<DictionaryAttr>("maps.bundle");
   if (!bundle)
     return success();
@@ -70,30 +70,30 @@ static LogicalResult collectBundleMetadata(ModuleOp module,
       weightsSha256.getValue().size() != 64)
     return failure();
 
-  model.hasPackedWeights = true;
-  model.weightsFile = weightsFile.getValue().str();
-  model.weightsSize = weightsSize.getInt();
-  model.weightsSha256 = weightsSha256.getValue().str();
-  model.weightsAlignment = alignment.getInt();
-  if (model.l2Base % model.weightsAlignment != 0)
+  application.hasPackedWeights = true;
+  application.weightsFile = weightsFile.getValue().str();
+  application.weightsSize = weightsSize.getInt();
+  application.weightsSha256 = weightsSha256.getValue().str();
+  application.weightsAlignment = alignment.getInt();
+  if (application.l2Base % application.weightsAlignment != 0)
     return failure();
 
   if (auto capacity = module->getAttrOfType<IntegerAttr>(
           "maps.l2_capacity_bytes")) {
     if (capacity.getInt() <= 0)
       return failure();
-    uint64_t configuredEnd = model.l2Base + capacity.getInt();
-    model.l2End = std::min(model.l2End, configuredEnd);
+    uint64_t configuredEnd = application.l2Base + capacity.getInt();
+    application.l2End = std::min(application.l2End, configuredEnd);
   }
-  if (model.weightsSize > model.l2End - model.l2Base)
+  if (application.weightsSize > application.l2End - application.l2Base)
     return failure();
-  model.nextL2Address = alignTo(model.l2Base + model.weightsSize,
+  application.nextL2Address = alignTo(application.l2Base + application.weightsSize,
                                 kGeneratedL2AlignmentBytes);
   return success();
 }
 
 
-static LogicalResult collectInitRegion(Operation *initOp, MagiaApplicationDescription &model) {
+static LogicalResult collectInitRegion(Operation *initOp, MagiaApplicationDescription &application) {
 
   llvm::StringMap<L2SourceInfo> sources; // llvm hash map optimized for llvm strings
   collectL2Sources(initOp, sources);
@@ -104,7 +104,7 @@ static LogicalResult collectInitRegion(Operation *initOp, MagiaApplicationDescri
     if (op->getName().getStringRef() != "maps.store")
       return WalkResult::advance();
 
-    if (failed(collectInitializerStore(op, sources, model)))
+    if (failed(collectInitializerStore(op, sources, application)))
       return WalkResult::interrupt();
 
     return WalkResult::advance();
@@ -118,13 +118,13 @@ static LogicalResult collectInitRegion(Operation *initOp, MagiaApplicationDescri
 }
 
 
-static LogicalResult collectRunRegion(Operation *runOp, MagiaApplicationDescription &model) {
+static LogicalResult collectRunRegion(Operation *runOp, MagiaApplicationDescription &application) {
   
   llvm::StringMap<L2SourceInfo> sources;
   collectL2Sources(runOp, sources);
 
   RunCollectionState state;
-  if (failed(collectTileRecvs(runOp, state, model)))
+  if (failed(collectTileRecvs(runOp, state, application)))
     return failure();
   
   // Collect the host-side insertion offsets of outputs. The operation is the
@@ -135,25 +135,25 @@ static LogicalResult collectRunRegion(Operation *runOp, MagiaApplicationDescript
     StringRef name = op->getName().getStringRef();
 
     if (name == "maps.recv") {
-      if (failed(collectInputRecv(op, sources, state, model)))
+      if (failed(collectInputRecv(op, sources, state, application)))
         return WalkResult::interrupt();
       return WalkResult::advance();
     }
 
     if (name == "maps.load") {
-      if (failed(collectLoad(op, state, model)))
+      if (failed(collectLoad(op, state, application)))
         return WalkResult::interrupt();
       return WalkResult::advance();
     }
 
     if (name == "tensor.extract_slice") {
-      if (failed(collectExtractSliceAlias(op, state, model)))
+      if (failed(collectExtractSliceAlias(op, state, application)))
         return WalkResult::interrupt();
       return WalkResult::advance();
     }
 
     if (name == "tensor.insert_slice") {
-      if (failed(collectInsertSliceAlias(op, state, model)))
+      if (failed(collectInsertSliceAlias(op, state, application)))
         return WalkResult::interrupt();
       return WalkResult::advance();
     }
@@ -163,7 +163,7 @@ static LogicalResult collectRunRegion(Operation *runOp, MagiaApplicationDescript
     This would become something like:
     
     if (name == "maps.execute"){
-      if (failed(collectComputeOp(op, state, model)))
+      if (failed(collectComputeOp(op, state, application)))
         return WalkResult::interrupt();
       return WalkResult::advance();}
 
@@ -173,7 +173,7 @@ static LogicalResult collectRunRegion(Operation *runOp, MagiaApplicationDescript
 
     if (name == "linalg.matmul" || name == "linalg.generic" ||
         name == "maps.conv2d" || name == "maps.kernel") {
-      if (failed(collectComputeOp(op, state, model)))
+      if (failed(collectComputeOp(op, state, application)))
         return WalkResult::interrupt();
       return WalkResult::advance();
     }
@@ -181,7 +181,7 @@ static LogicalResult collectRunRegion(Operation *runOp, MagiaApplicationDescript
     if (name != "maps.send")
       return WalkResult::advance();
 
-    if (failed(collectProducedSend(op, state, model)))
+    if (failed(collectProducedSend(op, state, application)))
       return WalkResult::interrupt();
 
     return WalkResult::advance();
@@ -195,10 +195,10 @@ static LogicalResult collectRunRegion(Operation *runOp, MagiaApplicationDescript
 
 
 // Top level collector function
-LogicalResult collectMagiaApplicationDescription(ModuleOp module, MagiaApplicationDescription &model) {
-  if (failed(collectDeploymentIdentity(module, model)) ||
-      failed(collectExecutionContract(module, model)) ||
-      failed(collectBundleMetadata(module, model)))
+LogicalResult collectMagiaApplicationDescription(ModuleOp module, MagiaApplicationDescription &application) {
+  if (failed(collectDeploymentIdentity(module, application)) ||
+      failed(collectExecutionContract(module, application)) ||
+      failed(collectBundleMetadata(module, application)))
     return failure();
                                         
   WalkResult result = module.walk([&](Operation *op) -> WalkResult {
@@ -206,13 +206,13 @@ LogicalResult collectMagiaApplicationDescription(ModuleOp module, MagiaApplicati
 
     // init region collection
     if (name == "maps.init") {
-      if (failed(collectInitRegion(op, model)))
+      if (failed(collectInitRegion(op, application)))
         return WalkResult::interrupt();
     }
 
     // run region collector
     if (name == "maps.run") {
-      if (failed(collectRunRegion(op, model)))
+      if (failed(collectRunRegion(op, application)))
         return WalkResult::interrupt();
     }
   

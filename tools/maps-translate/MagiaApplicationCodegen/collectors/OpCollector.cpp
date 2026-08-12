@@ -119,7 +119,7 @@ static LogicalResult fillCollectiveDescriptor(Operation *op,
 }
 
 LogicalResult collectComputeOp(Operation *op, RunCollectionState &state,
-                               MagiaApplicationDescription &model) {
+                               MagiaApplicationDescription &application) {
   StringRef name = op->getName().getStringRef();
   bool isMatmul = name == "linalg.matmul";
   bool isGeneric = name == "linalg.generic";
@@ -209,19 +209,19 @@ LogicalResult collectComputeOp(Operation *op, RunCollectionState &state,
   std::string uniqueKey =
       (Twine("op:") + Twine(tileId.getInt()) + ":" + valueKey).str();
   unsigned outputSliceIndex = getOrCreateProducedSlice(
-      model, state.producedSliceIndices, uniqueKey, valueKey,
+      application, state.producedSliceIndices, uniqueKey, valueKey,
       GeneratedGlobalKind::Intermediate, tileId.getInt(), outputType, {});
   if (outputSliceIndex == std::numeric_limits<unsigned>::max())
     return failure();
 
   unsigned outputSubsliceIndex =
-      addWholeSubsliceForSlice(model, outputSliceIndex);
+      addWholeSubsliceForSlice(application, outputSliceIndex);
   generatedOp.outputSubsliceIndices.push_back(outputSubsliceIndex);
   state.valueSubsliceIndices[op->getResult(0)] = outputSubsliceIndex;
 
-  unsigned opIndex = addGeneratedOp(model, generatedOp);
-  noteTile(model, tileId.getInt());
-  model.tilePlans[tileId.getInt()].opIndices.push_back(opIndex);
+  unsigned opIndex = addGeneratedOp(application, generatedOp);
+  noteTile(application, tileId.getInt());
+  application.tilePlans[tileId.getInt()].opIndices.push_back(opIndex);
   return success();
 }
 

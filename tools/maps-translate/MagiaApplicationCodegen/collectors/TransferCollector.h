@@ -6,9 +6,9 @@
 namespace mlir::maps {
 
 LogicalResult collectTileRecvs(Operation *runOp, RunCollectionState &state,
-                               MagiaApplicationDescription &model);
+                               MagiaApplicationDescription &application);
 LogicalResult collectProducedSend(Operation *sendOp, RunCollectionState &state,
-                                  MagiaApplicationDescription &model);
+                                  MagiaApplicationDescription &application);
 
 } // namespace mlir::maps
 

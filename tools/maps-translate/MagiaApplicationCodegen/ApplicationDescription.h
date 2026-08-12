@@ -226,19 +226,19 @@ struct MagiaApplicationDescription {
   uint64_t nextL2Address = kMagiaL2Base;
 };
 
-unsigned addGeneratedSlice(MagiaApplicationDescription &model, GeneratedSlice slice);
-unsigned addGeneratedSubslice(MagiaApplicationDescription &model,
+unsigned addGeneratedSlice(MagiaApplicationDescription &application, GeneratedSlice slice);
+unsigned addGeneratedSubslice(MagiaApplicationDescription &application,
                               GeneratedSubslice subslice);
 GeneratedSubslice makeWholeSubslice(const GeneratedSlice &slice);
 uint64_t computeOffsetBytes(ArrayRef<int64_t> offsets,
                             ArrayRef<uint64_t> stridesBytes);
-unsigned addGeneratedL2Read(MagiaApplicationDescription &model, GeneratedL2Read read);
-unsigned getOrCreateTransitionId(MagiaApplicationDescription &model, StringRef channel);
-unsigned addGeneratedRecv(MagiaApplicationDescription &model, GeneratedRecv recv);
-unsigned addGeneratedSend(MagiaApplicationDescription &model, GeneratedSend send);
-unsigned addGeneratedOp(MagiaApplicationDescription &model, GeneratedOp op);
-unsigned addGeneratedL2Write(MagiaApplicationDescription &model, GeneratedL2Write write);
-void noteTile(MagiaApplicationDescription &model, int64_t hartid);
+unsigned addGeneratedL2Read(MagiaApplicationDescription &application, GeneratedL2Read read);
+unsigned getOrCreateTransitionId(MagiaApplicationDescription &application, StringRef channel);
+unsigned addGeneratedRecv(MagiaApplicationDescription &application, GeneratedRecv recv);
+unsigned addGeneratedSend(MagiaApplicationDescription &application, GeneratedSend send);
+unsigned addGeneratedOp(MagiaApplicationDescription &application, GeneratedOp op);
+unsigned addGeneratedL2Write(MagiaApplicationDescription &application, GeneratedL2Write write);
+void noteTile(MagiaApplicationDescription &application, int64_t hartid);
 uint64_t alignTo(uint64_t value, uint64_t alignment);
 uint64_t product(ArrayRef<int64_t> values);
 std::string normalizeSnakeCase(StringRef value);
@@ -246,17 +246,17 @@ uint64_t computeSlotBytes(const GeneratedSlice &slice);
 unsigned getElementByteWidth(Type type);
 SmallVector<uint64_t> computeContiguousStridesBytes(ArrayRef<int64_t> shape,
                                                     unsigned elemBytes);
-LogicalResult getOrCreateL2Global(MagiaApplicationDescription &model,
+LogicalResult getOrCreateL2Global(MagiaApplicationDescription &application,
                                   StringRef globalName,
                                   GeneratedGlobalKind globalKind,
                                   RankedTensorType tensorType,
                                   unsigned numTokens,
                                   unsigned &l2GlobalIndex,
                                   const struct L2SourceInfo *sourceInfo = nullptr);
-LogicalResult allocateSliceInTileL1(MagiaApplicationDescription &model,
+LogicalResult allocateSliceInTileL1(MagiaApplicationDescription &application,
                                     unsigned sliceIndex);
 SmallVector<const GeneratedTilePlan *>
-getSortedTilePlans(const MagiaApplicationDescription &model);
+getSortedTilePlans(const MagiaApplicationDescription &application);
 
 } // namespace mlir::maps
 

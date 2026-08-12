@@ -42,44 +42,44 @@ std::string normalizeSnakeCase(StringRef value) {
   return normalized;
 }
 
-static unsigned getOrCreateGlobalId(MagiaApplicationDescription &model,
+static unsigned getOrCreateGlobalId(MagiaApplicationDescription &application,
                                     StringRef globalName) {
-  auto existing = model.globalIds.find(globalName);
-  if (existing != model.globalIds.end())
+  auto existing = application.globalIds.find(globalName);
+  if (existing != application.globalIds.end())
     return existing->second;
 
-  unsigned globalId = model.nextGlobalId++;
-  model.globalIds[globalName] = globalId;
+  unsigned globalId = application.nextGlobalId++;
+  application.globalIds[globalName] = globalId;
   return globalId;
 }
 
-static unsigned allocateSliceIdForHart(MagiaApplicationDescription &model,
+static unsigned allocateSliceIdForHart(MagiaApplicationDescription &application,
                                        int64_t hartid) {
-  unsigned sliceId = model.nextSliceIdByHart[hartid];
-  model.nextSliceIdByHart[hartid] = sliceId + 1;
+  unsigned sliceId = application.nextSliceIdByHart[hartid];
+  application.nextSliceIdByHart[hartid] = sliceId + 1;
   return sliceId;
 }
 
 
-unsigned addGeneratedSlice(MagiaApplicationDescription &model, GeneratedSlice slice) {
+unsigned addGeneratedSlice(MagiaApplicationDescription &application, GeneratedSlice slice) {
   /*
   Add slice to plan
   */
-  slice.descriptionIndex = model.slices.size();
-  slice.globalId = getOrCreateGlobalId(model, slice.globalName);
-  slice.sliceId = allocateSliceIdForHart(model, slice.ownerHartid);
-  model.slices.push_back(std::move(slice));
-  return model.slices.back().descriptionIndex;
+  slice.descriptionIndex = application.slices.size();
+  slice.globalId = getOrCreateGlobalId(application, slice.globalName);
+  slice.sliceId = allocateSliceIdForHart(application, slice.ownerHartid);
+  application.slices.push_back(std::move(slice));
+  return application.slices.back().descriptionIndex;
 }
 
 
-unsigned addGeneratedSubslice(MagiaApplicationDescription &model, GeneratedSubslice subslice) {
+unsigned addGeneratedSubslice(MagiaApplicationDescription &application, GeneratedSubslice subslice) {
   /*
   Add subslice to plan
   */
-  subslice.descriptionIndex = model.subslices.size();
-  model.subslices.push_back(std::move(subslice));
-  return model.subslices.back().descriptionIndex;
+  subslice.descriptionIndex = application.subslices.size();
+  application.subslices.push_back(std::move(subslice));
+  return application.subslices.back().descriptionIndex;
 }
 
 
@@ -106,50 +106,50 @@ uint64_t computeOffsetBytes(ArrayRef<int64_t> offsets,
   return result;
 }
 
-unsigned addGeneratedL2Read(MagiaApplicationDescription &model, GeneratedL2Read read) {
+unsigned addGeneratedL2Read(MagiaApplicationDescription &application, GeneratedL2Read read) {
   /*
   Add L2 read descriptor to plan
   */
 
-  read.descriptionIndex = model.l2Reads.size();
-  model.l2Reads.push_back(read);
-  return model.l2Reads.back().descriptionIndex;
+  read.descriptionIndex = application.l2Reads.size();
+  application.l2Reads.push_back(read);
+  return application.l2Reads.back().descriptionIndex;
 
 }
 
 
-unsigned getOrCreateTransitionId(MagiaApplicationDescription &model, StringRef channel) {
-  auto existing = model.transitionIds.find(channel);
-  if (existing != model.transitionIds.end())
+unsigned getOrCreateTransitionId(MagiaApplicationDescription &application, StringRef channel) {
+  auto existing = application.transitionIds.find(channel);
+  if (existing != application.transitionIds.end())
     return existing->second;
 
-  unsigned transitionId = model.nextTransitionId++;
-  model.transitionIds[channel] = transitionId;
+  unsigned transitionId = application.nextTransitionId++;
+  application.transitionIds[channel] = transitionId;
   return transitionId;
 }
 
-unsigned addGeneratedRecv(MagiaApplicationDescription &model, GeneratedRecv recv) {
-  recv.descriptionIndex = model.recvs.size();
-  model.recvs.push_back(recv);
-  return model.recvs.back().descriptionIndex;
+unsigned addGeneratedRecv(MagiaApplicationDescription &application, GeneratedRecv recv) {
+  recv.descriptionIndex = application.recvs.size();
+  application.recvs.push_back(recv);
+  return application.recvs.back().descriptionIndex;
 }
 
-unsigned addGeneratedSend(MagiaApplicationDescription &model, GeneratedSend send) {
-  send.descriptionIndex = model.sends.size();
-  model.sends.push_back(send);
-  return model.sends.back().descriptionIndex;
+unsigned addGeneratedSend(MagiaApplicationDescription &application, GeneratedSend send) {
+  send.descriptionIndex = application.sends.size();
+  application.sends.push_back(send);
+  return application.sends.back().descriptionIndex;
 }
 
-unsigned addGeneratedOp(MagiaApplicationDescription &model, GeneratedOp op) {
-  op.descriptionIndex = model.ops.size();
-  model.ops.push_back(op);
-  return model.ops.back().descriptionIndex;
+unsigned addGeneratedOp(MagiaApplicationDescription &application, GeneratedOp op) {
+  op.descriptionIndex = application.ops.size();
+  application.ops.push_back(op);
+  return application.ops.back().descriptionIndex;
 }
 
-unsigned addGeneratedL2Write(MagiaApplicationDescription &model, GeneratedL2Write write) {
-  write.descriptionIndex = model.l2Writes.size();
-  model.l2Writes.push_back(write);
-  return model.l2Writes.back().descriptionIndex;
+unsigned addGeneratedL2Write(MagiaApplicationDescription &application, GeneratedL2Write write) {
+  write.descriptionIndex = application.l2Writes.size();
+  application.l2Writes.push_back(write);
+  return application.l2Writes.back().descriptionIndex;
 }
 
 static std::string getL2GlobalKey(GeneratedGlobalKind globalKind,
@@ -158,12 +158,12 @@ static std::string getL2GlobalKey(GeneratedGlobalKind globalKind,
 }
 
 
-void noteTile(MagiaApplicationDescription &model, int64_t hartid) {
+void noteTile(MagiaApplicationDescription &application, int64_t hartid) {
   /*
   Add tile to plan
   */
 
-  auto &plan = model.tilePlans[hartid];
+  auto &plan = application.tilePlans[hartid];
   plan.hartid = hartid;
 }
 
@@ -229,7 +229,7 @@ SmallVector<uint64_t> computeContiguousStridesBytes(ArrayRef<int64_t> shape, uns
 }
 
 
-LogicalResult getOrCreateL2Global(MagiaApplicationDescription &model,
+LogicalResult getOrCreateL2Global(MagiaApplicationDescription &application,
                                   StringRef globalName,
                                   GeneratedGlobalKind globalKind,
                                   RankedTensorType tensorType,
@@ -245,8 +245,8 @@ LogicalResult getOrCreateL2Global(MagiaApplicationDescription &model,
   std::string key = getL2GlobalKey(globalKind, globalName);
   
   // check if key exists, if it already exists, use it
-  auto existing = model.l2GlobalIndices.find(key);
-  if (existing != model.l2GlobalIndices.end()) {
+  auto existing = application.l2GlobalIndices.find(key);
+  if (existing != application.l2GlobalIndices.end()) {
     l2GlobalIndex = existing->second;
     return success();
   }
@@ -257,8 +257,8 @@ LogicalResult getOrCreateL2Global(MagiaApplicationDescription &model,
 
   // Create the global allocation
   GeneratedL2Global global;
-  global.descriptionIndex = model.l2Globals.size();
-  global.globalId = getOrCreateGlobalId(model, globalName);
+  global.descriptionIndex = application.l2Globals.size();
+  global.globalId = getOrCreateGlobalId(application, globalName);
   global.globalName = globalName.str();
   global.globalKind = globalKind;
   global.shape.append(tensorType.getShape().begin(), tensorType.getShape().end());
@@ -276,57 +276,57 @@ LogicalResult getOrCreateL2Global(MagiaApplicationDescription &model,
     global.packedByteSize = sourceInfo->packedByteSize;
     global.packedDtype = sourceInfo->packedDtype;
     global.packedShape = sourceInfo->packedShape;
-    global.requiredAlignment = model.weightsAlignment;
+    global.requiredAlignment = application.weightsAlignment;
 
-    if (!model.hasPackedWeights ||
+    if (!application.hasPackedWeights ||
         global.packedImageOffset % global.requiredAlignment != 0 ||
-        global.packedImageOffset + global.packedByteSize > model.weightsSize ||
+        global.packedImageOffset + global.packedByteSize > application.weightsSize ||
         global.packedShape != global.shape ||
         global.packedByteSize != global.tensorBytes)
       return failure();
 
-    global.l2Address = model.l2Base + global.packedImageOffset;
-    model.l2GlobalIndices[key] = global.descriptionIndex;
-    model.l2Globals.push_back(std::move(global));
-    l2GlobalIndex = model.l2Globals.back().descriptionIndex;
+    global.l2Address = application.l2Base + global.packedImageOffset;
+    application.l2GlobalIndices[key] = global.descriptionIndex;
+    application.l2Globals.push_back(std::move(global));
+    l2GlobalIndex = application.l2Globals.back().descriptionIndex;
     return success();
   }
 
   if (globalKind == GeneratedGlobalKind::Initializer &&
-      (model.hasPackedWeights || !model.randomizeInputs))
+      (application.hasPackedWeights || !application.randomizeInputs))
     return failure();
 
   // allign
-  model.nextL2Address = alignTo(model.nextL2Address,
+  application.nextL2Address = alignTo(application.nextL2Address,
                                 kGeneratedL2AlignmentBytes);
-  global.l2Address = model.nextL2Address;
+  global.l2Address = application.nextL2Address;
 
   // Return error if memory is exceeded
   uint64_t allocationBytes = global.tokenStrideBytes * global.numTokens;
-  if (global.l2Address + allocationBytes > model.l2End)
+  if (global.l2Address + allocationBytes > application.l2End)
     return failure();
 
   // set starting adress for next allocation
-  model.nextL2Address = global.l2Address + allocationBytes;
+  application.nextL2Address = global.l2Address + allocationBytes;
 
   // Advance the allocator
-  model.l2GlobalIndices[key] = global.descriptionIndex;
-  model.l2Globals.push_back(std::move(global));
-  l2GlobalIndex = model.l2Globals.back().descriptionIndex;
+  application.l2GlobalIndices[key] = global.descriptionIndex;
+  application.l2Globals.push_back(std::move(global));
+  l2GlobalIndex = application.l2Globals.back().descriptionIndex;
 
   return success();
 
 }
 
 
-LogicalResult allocateSliceInTileL1(MagiaApplicationDescription &model, unsigned sliceIndex) {
+LogicalResult allocateSliceInTileL1(MagiaApplicationDescription &application, unsigned sliceIndex) {
   /*
   Allocates space for a tile slice in tile's L1
   */
-  GeneratedSlice &slice = model.slices[sliceIndex];
+  GeneratedSlice &slice = application.slices[sliceIndex];
 
-  noteTile(model, slice.ownerHartid);
-  GeneratedTilePlan &plan = model.tilePlans[slice.ownerHartid];
+  noteTile(application, slice.ownerHartid);
+  GeneratedTilePlan &plan = application.tilePlans[slice.ownerHartid];
 
   // Get the amount of bytes the slice needs
   slice.slotBytes = computeSlotBytes(slice);
@@ -352,10 +352,10 @@ LogicalResult allocateSliceInTileL1(MagiaApplicationDescription &model, unsigned
 }
 
 SmallVector<const GeneratedTilePlan *>
-getSortedTilePlans(const MagiaApplicationDescription &model) {
+getSortedTilePlans(const MagiaApplicationDescription &application) {
   SmallVector<const GeneratedTilePlan *> plans;
-  plans.reserve(model.tilePlans.size());
-  for (const auto &entry : model.tilePlans)
+  plans.reserve(application.tilePlans.size());
+  for (const auto &entry : application.tilePlans)
     plans.push_back(&entry.second);
   llvm::sort(plans, [](const GeneratedTilePlan *lhs,
                        const GeneratedTilePlan *rhs) {
