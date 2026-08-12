@@ -148,7 +148,7 @@ collective_application="${test_dir}/collective"
 "${code_generator}" "${test_dir}/collective.mlir" \
   --target=magia-v2 \
   --maps-magia-output-stem=collective \
-  --maps-magia-weights-file="${test_dir}/collective.plan.weights.bin" \
+  --maps-magia-weights-file="${test_dir}/collective.plan.initializers.bin" \
   -o "${collective_application}"
 test "$(find "${collective_application}/src/tiles" -name 'tile_*.c' | wc -l)" -eq 4
 grep -Rq '.num_participants = 2u' "${collective_application}/src/tiles"
