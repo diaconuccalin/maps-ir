@@ -1,4 +1,4 @@
-#include "MapsToMagiaHeader/CodeGeneration.h"
+#include "MagiaApplicationCodegen/CodeGeneration.h"
 
 #include "maps/Dialect/Maps/IR/Maps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"

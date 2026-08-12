@@ -1,18 +1,7 @@
 #include "CodeGeneration.h"
 #include "Emitter.h"
 #include "IRCollector.h"
-#include "../ExecutionPlanImporter.h"
-
-#include "maps/Dialect/Maps/IR/Maps.h"
-
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/Linalg/IR/Linalg.h"
-#include "mlir/Dialect/Math/IR/Math.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "mlir/Tools/mlir-translate/Translation.h"
 
 #include "llvm/Support/CommandLine.h"
 #include "llvm/ADT/STLExtras.h"
@@ -37,8 +26,8 @@ static llvm::cl::opt<unsigned> magiaNumTokens(
 
 static llvm::cl::opt<std::string> magiaOutputStem(
     "maps-magia-output-stem",
-    llvm::cl::desc("C/assembly symbol stem for generated deployment artifacts"),
-    llvm::cl::init("model"));
+    llvm::cl::desc("MAGIA Application name and generated C symbol stem"),
+    llvm::cl::init("application"));
 
 static llvm::cl::opt<uint64_t> magiaL2Base(
     "maps-magia-l2-base",
@@ -65,82 +54,14 @@ static llvm::cl::list<std::string> magiaRuntimeInputs(
     llvm::cl::desc("Runtime Input assignment in original-tensor-name=file form"),
     llvm::cl::ZeroOrMore);
 
-static llvm::cl::opt<std::string> magiaPackageDir(
-    "maps-magia-package-dir",
-    llvm::cl::desc("directory written by --json-to-magia-package"),
-    llvm::cl::init(""));
-
-static void configureGeneratedRuntime(MagiaHeaderModel &model) {
-  model.numTokens = magiaNumTokens;
-  model.outputStem = magiaOutputStem;
-  model.l2Base = magiaL2Base;
-  model.l2End = magiaL2End;
-  model.nextL2Address = model.l2Base;
-  model.randomizeInputs = magiaRandomizeInputs;
-}
-
-static bool isValidSymbolStem(StringRef stem) {
-  if (stem.empty() || (!llvm::isAlpha(stem.front()) && stem.front() != '_'))
-    return false;
-  return llvm::all_of(stem.drop_front(), [](char value) {
-    return llvm::isAlnum(value) || value == '_';
-  });
-}
-
-// Main translation hook registered with mlir-translate.  It only coordinates
-// the three phases: verify the root op, collect a header model, then emit it.
-static LogicalResult translateMapsToMagiaHeader(Operation *op,
-                                                llvm::raw_ostream &os) {
-  auto module = dyn_cast<ModuleOp>(op);
-  if (!module)
-    return failure();
-
-  MagiaHeaderModel model;
-  configureGeneratedRuntime(model);
-  if (!isValidSymbolStem(model.outputStem) || model.l2End <= model.l2Base)
-    return failure();
-  if (failed(collectMagiaHeaderModel(module, model)))
-    return failure();
-
-  emitDebugHeader(model, os);
-  return success();
-}
-
-static LogicalResult translateMapsToMagiaData(Operation *op,
-                                              llvm::raw_ostream &os) {
-  auto module = dyn_cast<ModuleOp>(op);
-  if (!module)
-    return failure();
-
-  MagiaHeaderModel model;
-  configureGeneratedRuntime(model);
-  if (!isValidSymbolStem(model.outputStem) || model.l2End <= model.l2Base)
-    return failure();
-  if (failed(collectMagiaHeaderModel(module, model)))
-    return failure();
-
-  emitDataFile(model, os);
-  return success();
-}
-
-static LogicalResult translateMapsToMagiaWeightsAssembly(
-    Operation *op, llvm::raw_ostream &os) {
-  auto module = dyn_cast<ModuleOp>(op);
-  if (!module)
-    return failure();
-
-  MagiaHeaderModel model;
-  configureGeneratedRuntime(model);
-  if (!isValidSymbolStem(model.outputStem) || model.l2End <= model.l2Base ||
-      failed(collectMagiaHeaderModel(module, model)) ||
-      !model.hasPackedWeights)
-    return failure();
-
-  if (!magiaWeightsFile.empty())
-    model.weightsFile = magiaWeightsFile;
-
-  emitWeightsAssembly(model, os);
-  return success();
+static void configureGeneratedRuntime(
+    MagiaApplicationDescription &application) {
+  application.numTokens = magiaNumTokens;
+  application.outputStem = magiaOutputStem;
+  application.l2Base = magiaL2Base;
+  application.l2End = magiaL2End;
+  application.nextL2Address = application.l2Base;
+  application.randomizeInputs = magiaRandomizeInputs;
 }
 
 static LogicalResult writeTextArtifact(
@@ -179,7 +100,7 @@ static LogicalResult writeBinaryArtifact(StringRef path, StringRef contents) {
   return success();
 }
 
-static std::string packageArtifactPath(StringRef outputDirectory,
+static std::string applicationArtifactPath(StringRef outputDirectory,
                                        StringRef filename) {
   llvm::SmallString<256> path(outputDirectory);
   llvm::sys::path::append(path, filename);
@@ -214,39 +135,18 @@ static std::optional<std::string> manifestDtype(Type type) {
   return std::nullopt;
 }
 
-static FailureOr<llvm::json::Object>
-tensorManifestEntry(const GeneratedL2Global &global) {
-  std::optional<std::string> dtype = manifestDtype(global.elementType);
-  if (!dtype)
-    return failure();
-
-  llvm::json::Array shape;
-  for (int64_t dimension : global.shape)
-    shape.push_back(dimension);
-
-  llvm::json::Object tensor;
-  tensor["id"] = global.globalId;
-  tensor["name"] = global.globalName;
-  tensor["dtype"] = *dtype;
-  tensor["shape"] = std::move(shape);
-  tensor["encoding"] = "raw";
-  tensor["endianness"] = "little";
-  tensor["tensor_bytes"] = static_cast<int64_t>(global.tensorBytes);
-  return tensor;
-}
-
-struct PackageArtifact {
+struct GeneratedArtifact {
   std::string path;
   std::string role;
 };
 
 static FailureOr<llvm::json::Array>
-buildArtifactEntries(ArrayRef<PackageArtifact> artifacts,
+buildArtifactEntries(ArrayRef<GeneratedArtifact> artifacts,
                      StringRef outputDirectory) {
   llvm::json::Array entries;
-  for (const PackageArtifact &artifact : artifacts) {
+  for (const GeneratedArtifact &artifact : artifacts) {
     auto contentsOrError = llvm::MemoryBuffer::getFile(
-        packageArtifactPath(outputDirectory, artifact.path), /*IsText=*/false,
+        applicationArtifactPath(outputDirectory, artifact.path), /*IsText=*/false,
         /*RequiresNullTerminator=*/false);
     if (!contentsOrError)
       return failure();
@@ -259,190 +159,6 @@ buildArtifactEntries(ArrayRef<PackageArtifact> artifacts,
     });
   }
   return entries;
-}
-
-static LogicalResult writeDeploymentManifest(
-    const MagiaHeaderModel &model, ArrayRef<PackageArtifact> artifacts,
-    StringRef outputDirectory) {
-  if (model.sourceModelName.empty() || model.meshWidth == 0 ||
-      model.meshHeight == 0)
-    return failure();
-
-  llvm::json::Array inputs;
-  llvm::json::Array outputs;
-  for (const GeneratedL2Global &global : model.l2Globals) {
-    if (global.globalKind != GeneratedGlobalKind::Input &&
-        global.globalKind != GeneratedGlobalKind::Output)
-      continue;
-    FailureOr<llvm::json::Object> entry = tensorManifestEntry(global);
-    if (failed(entry))
-      return failure();
-    if (global.globalKind == GeneratedGlobalKind::Input)
-      inputs.push_back(std::move(*entry));
-    else
-      outputs.push_back(std::move(*entry));
-  }
-
-  uint64_t maxTileDataBytes = 0;
-  for (const auto &tilePlan : model.tilePlans)
-    maxTileDataBytes =
-        std::max(maxTileDataBytes, tilePlan.second.l1DataBytes);
-
-  FailureOr<llvm::json::Array> artifactEntries =
-      buildArtifactEntries(artifacts, outputDirectory);
-  if (failed(artifactEntries))
-    return failure();
-
-  llvm::json::Object manifest{
-      {"schema_version", 1},
-      {"source_model",
-       llvm::json::Object{
-           {"name", model.sourceModelName},
-           {"inputs", std::move(inputs)},
-           {"outputs", std::move(outputs)},
-       }},
-      {"target",
-       llvm::json::Object{
-           {"architecture", "magia-v2"},
-           {"mesh",
-            llvm::json::Object{
-                {"width", model.meshWidth},
-                {"height", model.meshHeight},
-            }},
-       }},
-      {"execution",
-       llvm::json::Object{
-           {"num_token_slots", model.numTokenSlots},
-           {"pipeline_token_capacity", model.numTokens},
-       }},
-      {"abi",
-       llvm::json::Object{
-           {"operation_version", kGeneratedOperationAbiVersion},
-           {"descriptor_version", kGeneratedDescriptorAbiVersion},
-           {"descriptor_max_dimensions", kGeneratedDescriptorMaxDims},
-       }},
-      {"entry_points",
-       llvm::json::Object{
-           {"init_l2_data", "maps_generated_init_l2_data"},
-           {"init_tensors", "maps_generated_init_tensors"},
-           {"fill_plan", "maps_generated_fill_plan"},
-           {"check_output", "maps_generated_check_output"},
-       }},
-      {"memory",
-       llvm::json::Object{
-           {"ready_flags_offset",
-            static_cast<int64_t>(kGeneratedReadyFlagsOffset)},
-           {"max_tile_data_bytes", static_cast<int64_t>(maxTileDataBytes)},
-           {"weights_size", static_cast<int64_t>(model.weightsSize)},
-           {"required_l2_bytes",
-            static_cast<int64_t>(model.nextL2Address - model.l2Base)},
-       }},
-      {"artifacts", std::move(*artifactEntries)},
-  };
-
-  std::string manifestText =
-      llvm::formatv("{0:2}\n", llvm::json::Value(std::move(manifest))).str();
-  return writeTextArtifact(
-      packageArtifactPath(outputDirectory, "manifest.json"),
-      [&](llvm::raw_ostream &os) { os << manifestText; });
-}
-
-static LogicalResult generateLegacyMagiaPackage(ModuleOp module,
-                                                StringRef outputDirectory);
-
-static OwningOpRef<Operation *>
-translateJsonToMagiaPackage(StringRef input, MLIRContext *context) {
-  if (magiaPackageDir.empty()) {
-    llvm::errs() << "--maps-magia-package-dir is required\n";
-    return {};
-  }
-
-  OwningOpRef<Operation *> imported = importExecutionPlan(input, context);
-  if (!imported)
-    return {};
-  auto module = dyn_cast<ModuleOp>(imported.get());
-  if (!module)
-    return {};
-
-  if (failed(generateLegacyMagiaPackage(module, magiaPackageDir)))
-    return {};
-  return imported;
-}
-
-static LogicalResult generateLegacyMagiaPackage(ModuleOp module,
-                                                StringRef outputDirectory) {
-  MagiaHeaderModel model;
-  configureGeneratedRuntime(model);
-  if (!isValidSymbolStem(model.outputStem) || model.l2End <= model.l2Base ||
-      failed(collectMagiaHeaderModel(module, model)) ||
-      !model.hasPackedWeights)
-    return failure();
-
-  StringRef sourceWeights =
-      magiaWeightsFile.empty() ? StringRef(model.weightsFile)
-                               : StringRef(magiaWeightsFile);
-  auto weightsOrError = llvm::MemoryBuffer::getFile(
-      sourceWeights, /*IsText=*/false, /*RequiresNullTerminator=*/false);
-  if (!weightsOrError) {
-    llvm::errs() << "failed to read packed weights '" << sourceWeights
-                 << "': " << weightsOrError.getError().message() << "\n";
-    return failure();
-  }
-  StringRef weights = (*weightsOrError)->getBuffer();
-  if (weights.size() != model.weightsSize) {
-    llvm::errs() << "packed weights size mismatch: expected "
-                 << model.weightsSize << " bytes, found " << weights.size()
-                 << "\n";
-    return failure();
-  }
-  if (sha256(weights) != model.weightsSha256) {
-    llvm::errs() << "packed weights checksum mismatch\n";
-    return failure();
-  }
-
-  std::error_code directoryError =
-      llvm::sys::fs::create_directories(outputDirectory);
-  if (directoryError) {
-    llvm::errs() << "failed to create package directory '" << outputDirectory
-                 << "': " << directoryError.message() << "\n";
-    return failure();
-  }
-
-  std::string headerName = model.outputStem + ".h";
-  std::string dataName = model.outputStem + "_data.c";
-  std::string assemblyName = model.outputStem + "_weights.S";
-  std::string weightsName = model.outputStem + ".weights.bin";
-  model.weightsFile = weightsName;
-
-  if (failed(writeTextArtifact(
-          packageArtifactPath(outputDirectory, headerName),
-          [&](llvm::raw_ostream &os) { emitDebugHeader(model, os); })) ||
-      failed(writeTextArtifact(
-          packageArtifactPath(outputDirectory, dataName),
-          [&](llvm::raw_ostream &os) { emitDataFile(model, os); })) ||
-      failed(writeTextArtifact(
-          packageArtifactPath(outputDirectory, assemblyName),
-          [&](llvm::raw_ostream &os) { emitWeightsAssembly(model, os); })))
-    return failure();
-
-  {
-    if (failed(writeBinaryArtifact(
-            packageArtifactPath(outputDirectory, weightsName), weights)))
-      return failure();
-  }
-
-  SmallVector<PackageArtifact> artifacts{
-      {headerName, "header"},
-      {dataName, "data_source"},
-      {assemblyName, "weights_assembly"},
-      {weightsName, "weights_image"},
-  };
-  if (failed(writeDeploymentManifest(model, artifacts, outputDirectory))) {
-    llvm::errs() << "failed to write deployment manifest\n";
-    return failure();
-  }
-
-  return success();
 }
 
 static FailureOr<llvm::json::Object>
@@ -473,7 +189,7 @@ applicationTensorEntry(const GeneratedL2Global &global) {
   return entry;
 }
 
-static LogicalResult writeApplicationManifest(const MagiaHeaderModel &model,
+static LogicalResult writeApplicationManifest(const MagiaApplicationDescription &model,
                                               StringRef outputDirectory) {
   llvm::json::Array inputs;
   llvm::json::Array outputs;
@@ -498,11 +214,11 @@ static LogicalResult writeApplicationManifest(const MagiaHeaderModel &model,
   }
 
   std::string name = model.outputStem;
-  SmallVector<PackageArtifact> generatedArtifacts{
+  SmallVector<GeneratedArtifact> generatedArtifacts{
       {"CMakeLists.txt", "build_definition"},
       {"README.md", "integration_guide"},
-      {"include/" + name + ".h", "model_interface"},
-      {"src/" + name + ".c", "model_data"},
+      {"include/" + name + ".h", "application_interface"},
+      {"src/" + name + ".c", "application_data"},
       {"src/" + name + "_runner.c", "application_runner"},
       {"src/" + name + "_initializers.S.in", "initializer_assembly"},
       {"data/" + name + ".initializers.bin", "initializer_data"},
@@ -567,11 +283,11 @@ static LogicalResult writeApplicationManifest(const MagiaHeaderModel &model,
   std::string manifestText =
       llvm::formatv("{0:2}\n", llvm::json::Value(std::move(manifest))).str();
   return writeTextArtifact(
-      packageArtifactPath(outputDirectory, "manifest.json"),
+      applicationArtifactPath(outputDirectory, "manifest.json"),
       [&](llvm::raw_ostream &os) { os << manifestText; });
 }
 
-static LogicalResult configureRuntimeInputs(MagiaHeaderModel &model) {
+static LogicalResult configureRuntimeInputs(MagiaApplicationDescription &model) {
   llvm::StringMap<GeneratedL2Global *> inputs;
   llvm::StringSet<> normalizedNames;
   for (GeneratedL2Global &global : model.l2Globals) {
@@ -609,11 +325,11 @@ static LogicalResult configureRuntimeInputs(MagiaHeaderModel &model) {
 
 LogicalResult generateMagiaApplication(ModuleOp module,
                                        StringRef outputDirectory) {
-  MagiaHeaderModel model;
+  MagiaApplicationDescription model;
   configureGeneratedRuntime(model);
   model.outputStem = normalizeSnakeCase(model.outputStem);
   if (model.l2End <= model.l2Base ||
-      failed(collectMagiaHeaderModel(module, model)) ||
+      failed(collectMagiaApplicationDescription(module, model)) ||
       model.sourceModelName.empty() || model.meshWidth == 0 ||
       model.meshHeight == 0 || !model.hasPackedWeights || model.numTokens == 0 ||
       failed(configureRuntimeInputs(model)))
@@ -646,7 +362,7 @@ LogicalResult generateMagiaApplication(ModuleOp module,
                               StringRef("data")}) {
     std::string path = directory.empty()
                            ? outputDirectory.str()
-                           : packageArtifactPath(outputDirectory, directory);
+                           : applicationArtifactPath(outputDirectory, directory);
     std::error_code error = llvm::sys::fs::create_directories(path);
     if (error) {
       llvm::errs() << "failed to create application directory '" << path
@@ -658,7 +374,7 @@ LogicalResult generateMagiaApplication(ModuleOp module,
   std::string name = model.outputStem;
   auto writeApplicationText =
       [&](StringRef path, llvm::function_ref<void(llvm::raw_ostream &)> emit) {
-        return writeTextArtifact(packageArtifactPath(outputDirectory, path),
+        return writeTextArtifact(applicationArtifactPath(outputDirectory, path),
                                  emit);
       };
   if (failed(writeApplicationText(
@@ -672,7 +388,7 @@ LogicalResult generateMagiaApplication(ModuleOp module,
           [&](llvm::raw_ostream &os) { emitApplicationHeader(model, os); })) ||
       failed(writeApplicationText("src/" + name + ".c",
                                   [&](llvm::raw_ostream &os) {
-                                    emitApplicationModelSource(model, os);
+                                    emitApplicationDataSource(model, os);
                                   })) ||
       failed(writeApplicationText(
           "src/" + name + "_runner.c",
@@ -695,7 +411,7 @@ LogicalResult generateMagiaApplication(ModuleOp module,
       return failure();
   }
   if (failed(writeBinaryArtifact(
-          packageArtifactPath(outputDirectory,
+          applicationArtifactPath(outputDirectory,
                               "data/" + name + ".initializers.bin"),
           initializers)))
     return failure();
@@ -707,7 +423,7 @@ LogicalResult generateMagiaApplication(ModuleOp module,
         /*RequiresNullTerminator=*/false);
     if (!inputOrError ||
         failed(writeBinaryArtifact(
-            packageArtifactPath(outputDirectory,
+            applicationArtifactPath(outputDirectory,
                                 "data/" + global.runtimeInputAsset),
             (*inputOrError)->getBuffer())))
       return failure();
@@ -715,52 +431,6 @@ LogicalResult generateMagiaApplication(ModuleOp module,
   if (failed(writeApplicationManifest(model, outputDirectory)))
     return failure();
   return success();
-}
-
-void registerMapsToMagiaHeaderTranslation() {
-  TranslateFromMLIRRegistration reg(
-      "maps-to-magia-header",
-      "emit MAGIA SDK test header from MAPS MLIR",
-      translateMapsToMagiaHeader,
-      [](DialectRegistry &registry) {
-        registry.insert<maps::MapsDialect, func::FuncDialect,
-                        tensor::TensorDialect, linalg::LinalgDialect,
-                        math::MathDialect, scf::SCFDialect,
-                        arith::ArithDialect>();
-      });
-
-  TranslateFromMLIRRegistration dataReg(
-      "maps-to-magia-data",
-      "emit MAGIA SDK L2 tensor data companion source from MAPS MLIR",
-      translateMapsToMagiaData,
-      [](DialectRegistry &registry) {
-        registry.insert<maps::MapsDialect, func::FuncDialect,
-                        tensor::TensorDialect, linalg::LinalgDialect,
-                        math::MathDialect, scf::SCFDialect,
-                        arith::ArithDialect>();
-      });
-
-  TranslateFromMLIRRegistration weightsReg(
-      "maps-to-magia-weights-asm",
-      "emit an assembly wrapper for the canonical packed weights image",
-      translateMapsToMagiaWeightsAssembly,
-      [](DialectRegistry &registry) {
-        registry.insert<maps::MapsDialect, func::FuncDialect,
-                        tensor::TensorDialect, linalg::LinalgDialect,
-                        math::MathDialect, scf::SCFDialect,
-                        arith::ArithDialect>();
-      });
-
-  TranslateToMLIRRegistration packageReg(
-      "json-to-magia-package",
-      "import a MAPS deployment bundle and write all MAGIA runtime artifacts",
-      translateJsonToMagiaPackage,
-      [](DialectRegistry &registry) {
-        registry.insert<maps::MapsDialect, func::FuncDialect,
-                        tensor::TensorDialect, linalg::LinalgDialect,
-                        math::MathDialect, scf::SCFDialect,
-                        arith::ArithDialect>();
-      });
 }
 
 } // namespace mlir::maps

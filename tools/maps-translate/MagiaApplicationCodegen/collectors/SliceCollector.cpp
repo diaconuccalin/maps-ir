@@ -18,7 +18,7 @@ GeneratedSubslice makeSubsliceFromAttr(const GeneratedSlice &slice,
 
   // Create a subslice that points inside the given slice
   GeneratedSubslice subslice;
-  subslice.sliceIndex = slice.modelIndex;
+  subslice.sliceIndex = slice.descriptionIndex;
   subslice.offset = getPairwiseOffsets(sliceDims);
   subslice.shape = getPairwiseLengths(sliceDims);
   subslice.elementType = slice.elementType;
@@ -28,14 +28,14 @@ GeneratedSubslice makeSubsliceFromAttr(const GeneratedSlice &slice,
 }
 
 
-unsigned addWholeSubsliceForSlice(MagiaHeaderModel &model, unsigned sliceIndex) {
+unsigned addWholeSubsliceForSlice(MagiaApplicationDescription &model, unsigned sliceIndex) {
   // Add a subslice that covers the entire generated slice
   return addGeneratedSubslice(model, makeWholeSubslice(model.slices[sliceIndex]));
 }
 
 
 unsigned getOrCreateProducedSlice(
-    MagiaHeaderModel &model, llvm::StringMap<unsigned> &producedSliceIndices,
+    MagiaApplicationDescription &model, llvm::StringMap<unsigned> &producedSliceIndices,
     StringRef uniqueKey, StringRef globalName, GeneratedGlobalKind kind,
     int64_t ownerHartid, RankedTensorType tensorType,
     ArrayRef<int64_t> fullOffset) {
@@ -77,7 +77,7 @@ unsigned getOrCreateProducedSlice(
 
 LogicalResult collectInitializerStore(
     Operation *storeOp, const llvm::StringMap<L2SourceInfo> &sources,
-    MagiaHeaderModel &model) {
+    MagiaApplicationDescription &model) {
 
   /*
   Add L2 read descriptor for initializer data
@@ -144,7 +144,7 @@ LogicalResult collectInitializerStore(
 }
 
 
-LogicalResult collectInputRecv(Operation *recvOp, const llvm::StringMap<L2SourceInfo> &sources, RunCollectionState &state, MagiaHeaderModel &model) {
+LogicalResult collectInputRecv(Operation *recvOp, const llvm::StringMap<L2SourceInfo> &sources, RunCollectionState &state, MagiaApplicationDescription &model) {
 
   // Find the tile which the recv operation belongs to
   Operation *tileOp = findParentNamed(recvOp, "maps.tile");
@@ -209,7 +209,7 @@ LogicalResult collectInputRecv(Operation *recvOp, const llvm::StringMap<L2Source
 }
 
 
-LogicalResult collectLoad(Operation *loadOp, RunCollectionState &state, MagiaHeaderModel &model) {
+LogicalResult collectLoad(Operation *loadOp, RunCollectionState &state, MagiaApplicationDescription &model) {
   // Find the tile which the load operation belongs to
   Operation *tileOp = findParentNamed(loadOp, "maps.tile");
   if (!tileOp)
@@ -238,7 +238,7 @@ LogicalResult collectLoad(Operation *loadOp, RunCollectionState &state, MagiaHea
 }
 
 
-LogicalResult collectExtractSliceAlias(Operation *op, RunCollectionState &state, MagiaHeaderModel &model) {
+LogicalResult collectExtractSliceAlias(Operation *op, RunCollectionState &state, MagiaApplicationDescription &model) {
 
   // Ignore malformed extract_slice ops
   if (op->getNumOperands() == 0 || op->getNumResults() == 0)
@@ -268,7 +268,7 @@ LogicalResult collectExtractSliceAlias(Operation *op, RunCollectionState &state,
 }
 
 
-LogicalResult collectInsertSliceAlias(Operation *op, RunCollectionState &state, MagiaHeaderModel &model) {
+LogicalResult collectInsertSliceAlias(Operation *op, RunCollectionState &state, MagiaApplicationDescription &model) {
   // Ignore malformed insert_slice ops
   if (op->getNumOperands() < 2 || op->getNumResults() == 0)
     return success();

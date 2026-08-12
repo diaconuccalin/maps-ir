@@ -109,7 +109,7 @@ A send operation in the init region that starts from src = -1. This is the encod
 }
 
 
-LogicalResult addL2ReadForSlice(MagiaHeaderModel &model, unsigned sliceIndex,
+LogicalResult addL2ReadForSlice(MagiaApplicationDescription &model, unsigned sliceIndex,
                                 const L2SourceInfo &source,
                                 GeneratedGlobalKind globalKind,
                                 unsigned numTokens, bool isInitializerRead) {
@@ -198,7 +198,7 @@ void collectOutputInsertOffsets(Operation *ContainerOp, llvm::StringMap<OutputIn
   });
 }
 
-LogicalResult addOutputL2Write(MagiaHeaderModel &model, StringRef globalName,
+LogicalResult addOutputL2Write(MagiaApplicationDescription &model, StringRef globalName,
                                RankedTensorType outputGlobalType,
                                ArrayRef<int64_t> outputFullOffset,
                                unsigned srcSubsliceIndex, int64_t srcHartid) {

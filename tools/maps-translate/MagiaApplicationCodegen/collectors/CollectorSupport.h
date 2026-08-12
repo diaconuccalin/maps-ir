@@ -3,10 +3,10 @@ Suppport operation file for collection from maps-ir
 
 */
 
-#ifndef MAPS_TOOLS_MAPS_TRANSLATE_MAPSTOMAGIAHEADER_COLLECTORSUPPORT_H
-#define MAPS_TOOLS_MAPS_TRANSLATE_MAPSTOMAGIAHEADER_COLLECTORSUPPORT_H
+#ifndef MAPS_TOOLS_MAPS_TRANSLATE_MAGIAAPPLICATIONCODEGEN_COLLECTORSUPPORT_H
+#define MAPS_TOOLS_MAPS_TRANSLATE_MAGIAAPPLICATIONCODEGEN_COLLECTORSUPPORT_H
 
-#include "../Model.h"
+#include "../ApplicationDescription.h"
 
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"

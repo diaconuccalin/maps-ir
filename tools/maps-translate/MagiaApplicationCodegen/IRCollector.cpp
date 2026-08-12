@@ -15,7 +15,7 @@
 namespace mlir::maps {
 
 static LogicalResult collectExecutionContract(ModuleOp module,
-                                              MagiaHeaderModel &model) {
+                                              MagiaApplicationDescription &model) {
   auto numTokenSlots =
       module->getAttrOfType<IntegerAttr>("maps.num_token_slots");
   if (!numTokenSlots || numTokenSlots.getInt() <= 0 ||
@@ -27,7 +27,7 @@ static LogicalResult collectExecutionContract(ModuleOp module,
 }
 
 static LogicalResult collectDeploymentIdentity(ModuleOp module,
-                                               MagiaHeaderModel &model) {
+                                               MagiaApplicationDescription &model) {
   if (auto name = module->getAttrOfType<StringAttr>("maps.name"))
     model.sourceModelName = name.getValue().str();
 
@@ -48,7 +48,7 @@ static LogicalResult collectDeploymentIdentity(ModuleOp module,
 }
 
 static LogicalResult collectBundleMetadata(ModuleOp module,
-                                           MagiaHeaderModel &model) {
+                                           MagiaApplicationDescription &model) {
   auto bundle = module->getAttrOfType<DictionaryAttr>("maps.bundle");
   if (!bundle)
     return success();
@@ -93,7 +93,7 @@ static LogicalResult collectBundleMetadata(ModuleOp module,
 }
 
 
-static LogicalResult collectInitRegion(Operation *initOp, MagiaHeaderModel &model) {
+static LogicalResult collectInitRegion(Operation *initOp, MagiaApplicationDescription &model) {
 
   llvm::StringMap<L2SourceInfo> sources; // llvm hash map optimized for llvm strings
   collectL2Sources(initOp, sources);
@@ -118,7 +118,7 @@ static LogicalResult collectInitRegion(Operation *initOp, MagiaHeaderModel &mode
 }
 
 
-static LogicalResult collectRunRegion(Operation *runOp, MagiaHeaderModel &model) {
+static LogicalResult collectRunRegion(Operation *runOp, MagiaApplicationDescription &model) {
   
   llvm::StringMap<L2SourceInfo> sources;
   collectL2Sources(runOp, sources);
@@ -195,7 +195,7 @@ static LogicalResult collectRunRegion(Operation *runOp, MagiaHeaderModel &model)
 
 
 // Top level collector function
-LogicalResult collectMagiaHeaderModel(ModuleOp module, MagiaHeaderModel &model) {
+LogicalResult collectMagiaApplicationDescription(ModuleOp module, MagiaApplicationDescription &model) {
   if (failed(collectDeploymentIdentity(module, model)) ||
       failed(collectExecutionContract(module, model)) ||
       failed(collectBundleMetadata(module, model)))

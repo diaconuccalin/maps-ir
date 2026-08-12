@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
-from maps.deployment.serialization import write_execution_plan_json
+from maps.deployment.serialization import write_execution_plan
 from maps.graph import Node, OpKind, Tensor, TensorDType
 from maps.operations.elementwise import UnaryElementwisePayload
 from maps.planning import (
@@ -100,7 +100,7 @@ def write_granular_sharding_fixture(
         ),
         execution=ExecutionContract(num_token_slots=1),
     )
-    return write_execution_plan_json(plan, output_path)
+    return write_execution_plan(plan, output_path)
 
 
 if __name__ == "__main__":

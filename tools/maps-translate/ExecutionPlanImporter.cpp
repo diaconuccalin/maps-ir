@@ -1,7 +1,4 @@
-#include "JsonToMaps.h"
-
-// Translation registration function
-#include "mlir/Tools/mlir-translate/Translation.h"
+#include "ExecutionPlanImporter.h"
 
 // Dialects
 #include "maps/Dialect/Maps/IR/Maps.h"
@@ -1403,7 +1400,8 @@ collectInputTensorIds(const llvm::json::Array &stages,
     return ids;
 }
 
-OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
+static OwningOpRef<Operation *>
+importExecutionPlanDocument(StringRef input, MLIRContext *ctx) {
 
     ctx->loadDialect<maps::MapsDialect, 
         func::FuncDialect,
@@ -2608,22 +2606,6 @@ OwningOpRef<Operation *> importJsonToMaps(StringRef input, MLIRContext *ctx) {
 
 OwningOpRef<Operation *> importExecutionPlan(StringRef input,
                                              MLIRContext *context) {
-    return importJsonToMaps(input, context);
-}
-
-void registerJsonToMapsTranslation() {
-    TranslateToMLIRRegistration reg(
-        "json-to-maps",
-        "import MAPS JSON as MAPS Dialect",
-        importJsonToMaps,
-        [](DialectRegistry &registry) {
-            registry.insert<maps::MapsDialect,
-                            func::FuncDialect,
-                            tensor::TensorDialect,
-                            linalg::LinalgDialect,
-                            math::MathDialect,
-                            scf::SCFDialect,
-                            arith::ArithDialect>();
-    });
+    return importExecutionPlanDocument(input, context);
 }
 } // namespace mlir::maps

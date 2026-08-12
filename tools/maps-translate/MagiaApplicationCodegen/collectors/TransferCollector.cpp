@@ -11,7 +11,7 @@
 
 namespace mlir::maps {
 
-static LogicalResult collectTileRecv(Operation *recvOp, RunCollectionState &state, MagiaHeaderModel &model) {
+static LogicalResult collectTileRecv(Operation *recvOp, RunCollectionState &state, MagiaApplicationDescription &model) {
   /*
   Collect tile-to-tile receives before walking sends.
   A send descriptor needs the destination tile's L1 address, so each recv
@@ -130,7 +130,7 @@ static LogicalResult collectTileRecv(Operation *recvOp, RunCollectionState &stat
 }
 
 
-LogicalResult collectTileRecvs(Operation *runOp, RunCollectionState &state, MagiaHeaderModel &model) {
+LogicalResult collectTileRecvs(Operation *runOp, RunCollectionState &state, MagiaApplicationDescription &model) {
   /*
     here we are trying to collect the following pattern types:
     %21 = maps.recv @transition_matmul_0_to_log_0_matmul_out_from_tile49_to_tile21 {dst_hartid = 21 : i64, dst_parent_slice = array<i64: 64, 64, 39, 13>, 
@@ -191,7 +191,7 @@ getProducedSliceSource(Operation *sendOp) {
 }
 
 LogicalResult collectProducedSend(Operation *sendOp, RunCollectionState &state,
-                                  MagiaHeaderModel &model) {
+                                  MagiaApplicationDescription &model) {
   auto srcHartid = sendOp->getAttrOfType<IntegerAttr>("src_hartid");
   auto dstHartid = sendOp->getAttrOfType<IntegerAttr>("dst_hartid");
   if (!srcHartid || !dstHartid)

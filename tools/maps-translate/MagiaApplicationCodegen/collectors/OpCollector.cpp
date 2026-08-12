@@ -119,7 +119,7 @@ static LogicalResult fillCollectiveDescriptor(Operation *op,
 }
 
 LogicalResult collectComputeOp(Operation *op, RunCollectionState &state,
-                               MagiaHeaderModel &model) {
+                               MagiaApplicationDescription &model) {
   StringRef name = op->getName().getStringRef();
   bool isMatmul = name == "linalg.matmul";
   bool isGeneric = name == "linalg.generic";
