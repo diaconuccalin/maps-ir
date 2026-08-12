@@ -65,6 +65,14 @@ static std::string getWeightsSymbol(const MagiaHeaderModel &model,
   return (Twine(model.outputStem) + "_weights_" + suffix).str();
 }
 
+static std::string getRuntimeInputSymbol(const MagiaHeaderModel &model,
+                                         const GeneratedL2Global &global,
+                                         StringRef suffix) {
+  return (Twine(model.outputStem) + "_input_" +
+          normalizeSnakeCase(global.globalName) + "_" + suffix)
+      .str();
+}
+
 static void emitL2GlobalAddress(const MagiaHeaderModel &model,
                                 const GeneratedL2Global &global,
                                 uint64_t offset, llvm::raw_ostream &os) {
@@ -898,6 +906,42 @@ static std::string uppercase(StringRef value) {
   return result;
 }
 
+static std::string escapePrintfText(StringRef value) {
+  std::string result;
+  for (unsigned char character : value.bytes()) {
+    switch (character) {
+    case '%':
+      result += "%%";
+      break;
+    case '"':
+      result += "\\\"";
+      break;
+    case '\\':
+      result += "\\\\";
+      break;
+    case '\n':
+      result += "\\n";
+      break;
+    case '\r':
+      result += "\\r";
+      break;
+    case '\t':
+      result += "\\t";
+      break;
+    default:
+      if (character >= 0x20 && character <= 0x7e) {
+        result += static_cast<char>(character);
+      } else {
+        result += '\\';
+        result += static_cast<char>('0' + ((character >> 6) & 7));
+        result += static_cast<char>('0' + ((character >> 3) & 7));
+        result += static_cast<char>('0' + (character & 7));
+      }
+    }
+  }
+  return result;
+}
+
 static void replaceAll(std::string &text, StringRef from, StringRef to) {
   size_t position = 0;
   while ((position = text.find(from.str(), position)) != std::string::npos) {
@@ -926,7 +970,8 @@ void emitApplicationHeader(const MagiaHeaderModel &model,
   os << "#ifndef " << guard << "\n";
   os << "#define " << guard << "\n\n";
   os << "#include <stdint.h>\n\n";
-  os << "#define " << uppercase(model.outputStem) << "_EXECUTION_TOKENS 1u\n";
+  os << "#define " << uppercase(model.outputStem) << "_EXECUTION_TOKENS "
+     << model.numTokens << "u\n";
   os << "#define " << uppercase(model.outputStem) << "_TOKEN_SLOTS "
      << model.numTokenSlots << "u\n\n";
   os << "int " << model.outputStem << "_run(void);\n";
@@ -1100,8 +1145,11 @@ void emitApplicationRunner(const MagiaHeaderModel &model,
   os << "  eu_fsync_wait(&event_unit, " << uppercase(model.outputStem)
      << "_WAIT_MODE);\n";
   os << "  " << model.outputStem << "_initialize_data(hartid);\n";
-  os << "  if (hartid == 0u)\n";
-  os << "    " << model.outputStem << "_handle_input(0u);\n";
+  os << "  if (hartid == 0u) {\n";
+  os << "    for (uint32_t token = 0u; token < "
+     << uppercase(model.outputStem) << "_EXECUTION_TOKENS; ++token)\n";
+  os << "      " << model.outputStem << "_handle_input(token);\n";
+  os << "  }\n";
   os << "  fsync_sync_global(&fsync);\n";
   os << "  eu_fsync_wait(&event_unit, " << uppercase(model.outputStem)
      << "_WAIT_MODE);\n";
@@ -1111,12 +1159,17 @@ void emitApplicationRunner(const MagiaHeaderModel &model,
   os << "  eu_fsync_wait(&event_unit, " << uppercase(model.outputStem)
      << "_WAIT_MODE);\n";
   os << "  if (active)\n";
-  os << "    maps_fifo_run_tile_tokens(&plan, 1u, &idma, &event_unit);\n";
+  os << "    maps_fifo_run_tile_tokens(\n";
+  os << "        &plan, " << uppercase(model.outputStem)
+     << "_EXECUTION_TOKENS, &idma, &event_unit);\n";
   os << "  fsync_sync_global(&fsync);\n";
   os << "  eu_fsync_wait(&event_unit, " << uppercase(model.outputStem)
      << "_WAIT_MODE);\n";
-  os << "  if (hartid == 0u)\n";
-  os << "    " << model.outputStem << "_handle_output(0u);\n";
+  os << "  if (hartid == 0u) {\n";
+  os << "    for (uint32_t token = 0u; token < "
+     << uppercase(model.outputStem) << "_EXECUTION_TOKENS; ++token)\n";
+  os << "      " << model.outputStem << "_handle_output(token);\n";
+  os << "  }\n";
   os << "  return 0;\n";
   os << "}\n\n";
   os << "int main(void) { return " << model.outputStem << "_run(); }\n";
@@ -1129,6 +1182,13 @@ void emitInitialApplicationSource(const MagiaHeaderModel &model,
   os << "#include \"" << model.outputStem << ".h\"\n\n";
   os << "#include <stddef.h>\n";
   os << "#include \"utils/printf.h\"\n\n";
+  for (const GeneratedL2Global &global : model.l2Globals) {
+    if (global.runtimeInputFile.empty())
+      continue;
+    os << "extern const uint8_t "
+       << getRuntimeInputSymbol(model, global, "start") << "[];\n";
+  }
+  os << "\n";
   os << "void " << model.outputStem << "_handle_input(uint32_t token) {\n";
   for (const GeneratedL2Global &global : model.l2Globals) {
     if (global.globalKind != GeneratedGlobalKind::Input)
@@ -1136,10 +1196,19 @@ void emitInitialApplicationSource(const MagiaHeaderModel &model,
     std::string name = normalizeSnakeCase(global.globalName);
     os << "  uint8_t *" << name << " = " << model.outputStem << "_input_"
        << name << "(token);\n";
-    os << "  for (size_t index = 0; index < " << global.tensorBytes
-       << "u; ++index)\n";
-    os << "    " << name << "[index] = (uint8_t)(index + token * 17u + "
-       << global.globalId << "u * 31u);\n";
+    if (!global.runtimeInputFile.empty()) {
+      os << "  const uint8_t *" << name << "_data = "
+         << getRuntimeInputSymbol(model, global, "start") << ";\n";
+      os << "  for (size_t index = 0; index < " << global.tensorBytes
+         << "u; ++index)\n";
+      os << "    " << name << "[index] = " << name
+         << "_data[index + token * " << global.tensorBytes << "u];\n";
+    } else {
+      os << "  for (size_t index = 0; index < " << global.tensorBytes
+         << "u; ++index)\n";
+      os << "    " << name << "[index] = (uint8_t)(index + token * 17u + "
+         << global.globalId << "u * 31u);\n";
+    }
   }
   os << "}\n\n";
   os << "void " << model.outputStem << "_handle_output(uint32_t token) {\n";
@@ -1155,7 +1224,8 @@ void emitInitialApplicationSource(const MagiaHeaderModel &model,
     os << "    " << name << "_checksum = (" << name << "_checksum ^ " << name
        << "[index]) * 16777619u;\n";
     os << "  printf(\"" << model.outputStem << " token %u output "
-       << global.globalName << " checksum: %08x\\n\", token, " << name
+       << escapePrintfText(global.globalName)
+       << " checksum: %08x\\n\", token, " << name
        << "_checksum);\n";
   }
   os << "}\n";
@@ -1221,6 +1291,23 @@ void emitApplicationInitializersAssembly(const MagiaHeaderModel &model,
      << ".initializers.bin\"\n";
   os << end << ":\n";
   os << ".set " << size << ", " << end << " - " << start << "\n";
+  for (const GeneratedL2Global &global : model.l2Globals) {
+    if (global.runtimeInputFile.empty())
+      continue;
+    start = getRuntimeInputSymbol(model, global, "start");
+    end = getRuntimeInputSymbol(model, global, "end");
+    size = getRuntimeInputSymbol(model, global, "size");
+    os << "\n.section .maps_runtime_inputs,\"a\",@progbits\n";
+    os << ".balign " << kGeneratedL2AlignmentBytes << "\n";
+    os << ".global " << start << "\n";
+    os << ".global " << end << "\n";
+    os << ".global " << size << "\n";
+    os << start << ":\n";
+    os << ".incbin \"@CMAKE_CURRENT_SOURCE_DIR@/data/"
+       << global.runtimeInputAsset << "\"\n";
+    os << end << ":\n";
+    os << ".set " << size << ", " << end << " - " << start << "\n";
+  }
 }
 
 } // namespace mlir::maps

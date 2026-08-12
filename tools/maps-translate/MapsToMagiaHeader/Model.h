@@ -116,6 +116,8 @@ struct GeneratedL2Global {
   std::string packedDtype;
   SmallVector<int64_t> packedShape;
   uint64_t requiredAlignment = kGeneratedL2AlignmentBytes;
+  std::string runtimeInputFile;
+  std::string runtimeInputAsset;
 };
 
 struct GeneratedL2Read {

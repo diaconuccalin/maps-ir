@@ -273,7 +273,7 @@ grep -q 'uint8_t \*my_model_v1_input_x(uint32_t token);' \
   "${expert_output_dir}/include/my_model_v1.h"
 ! grep -q 'slice_desc_t\|fifo_tile_plan_t\|maps_generated' \
   "${expert_output_dir}/include/my_model_v1.h"
-grep -q 'my_model_v1_handle_input(0u)' \
+grep -q 'my_model_v1_handle_input(token)' \
   "${expert_output_dir}/src/my_model_v1_runner.c"
 for initializer in idma_init redmule_init fsync_init eu_init; do
   grep -q "${initializer}" "${expert_output_dir}/src/my_model_v1_runner.c"
@@ -302,9 +302,9 @@ grep -q 'my_model_v1_build_tile_00_plan' \
 grep -q 'uint8_t my_model_v1_l2_global_' \
   "${expert_output_dir}/src/my_model_v1.c"
 grep -q 'fsync_sync_global' "${expert_output_dir}/src/my_model_v1_runner.c"
-grep -q 'maps_fifo_run_tile_tokens(&plan, 1u' \
+grep -q 'MY_MODEL_V1_EXECUTION_TOKENS, &idma' \
   "${expert_output_dir}/src/my_model_v1_runner.c"
-grep -q 'my_model_v1_handle_output(0u)' \
+grep -q 'my_model_v1_handle_output(token)' \
   "${expert_output_dir}/src/my_model_v1_runner.c"
 grep -q 'Only customize this source file' \
   "${expert_output_dir}/src/application.c"

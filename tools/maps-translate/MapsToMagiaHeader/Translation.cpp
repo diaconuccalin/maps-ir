@@ -17,6 +17,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -58,6 +59,11 @@ static llvm::cl::opt<std::string> magiaWeightsFile(
     "maps-magia-weights-file",
     llvm::cl::desc("assembly .incbin path overriding bundle weights_file"),
     llvm::cl::init(""));
+
+static llvm::cl::list<std::string> magiaRuntimeInputs(
+    "maps-magia-runtime-input",
+    llvm::cl::desc("Runtime Input assignment in original-tensor-name=file form"),
+    llvm::cl::ZeroOrMore);
 
 static llvm::cl::opt<std::string> magiaPackageDir(
     "maps-magia-package-dir",
@@ -437,7 +443,7 @@ applicationTensorEntry(const GeneratedL2Global &global) {
   llvm::json::Array shape;
   for (int64_t dimension : global.shape)
     shape.push_back(dimension);
-  return llvm::json::Object{
+  llvm::json::Object entry{
       {"id", global.globalId},
       {"original_name", global.globalName},
       {"normalized_name", normalizeSnakeCase(global.globalName)},
@@ -445,6 +451,16 @@ applicationTensorEntry(const GeneratedL2Global &global) {
       {"shape", std::move(shape)},
       {"byte_size", static_cast<int64_t>(global.tensorBytes)},
   };
+  if (global.globalKind == GeneratedGlobalKind::Input) {
+    if (global.runtimeInputFile.empty())
+      entry["data"] = llvm::json::Object{{"kind", "synthetic"}};
+    else
+      entry["data"] = llvm::json::Object{
+          {"kind", "supplied"},
+          {"path", "data/" + global.runtimeInputAsset},
+      };
+  }
+  return entry;
 }
 
 static LogicalResult writeApplicationManifest(const MagiaHeaderModel &model,
@@ -486,6 +502,9 @@ static LogicalResult writeApplicationManifest(const MagiaHeaderModel &model,
     generatedFiles.push_back("src/tiles/" +
                              getApplicationTileFilename(model,
                                                         tilePlan->hartid));
+  for (const GeneratedL2Global &global : model.l2Globals)
+    if (!global.runtimeInputFile.empty())
+      generatedFiles.push_back("data/" + global.runtimeInputAsset);
   llvm::json::Array userOwnedFiles{"src/application.c"};
 
   llvm::json::Object manifest{
@@ -501,7 +520,8 @@ static LogicalResult writeApplicationManifest(const MagiaHeaderModel &model,
            {"descriptor", kGeneratedDescriptorAbiVersion},
        }},
       {"execution",
-       llvm::json::Object{{"tokens", 1}, {"token_slots", model.numTokenSlots}}},
+       llvm::json::Object{{"tokens", model.numTokens},
+                          {"token_slots", model.numTokenSlots}}},
       {"active_physical_tiles", std::move(activeTiles)},
       {"tensors", llvm::json::Object{{"inputs", std::move(inputs)},
                                      {"outputs", std::move(outputs)}}},
@@ -528,16 +548,52 @@ static LogicalResult writeApplicationManifest(const MagiaHeaderModel &model,
       [&](llvm::raw_ostream &os) { os << manifestText; });
 }
 
+static LogicalResult configureRuntimeInputs(MagiaHeaderModel &model) {
+  llvm::StringMap<GeneratedL2Global *> inputs;
+  llvm::StringSet<> normalizedNames;
+  for (GeneratedL2Global &global : model.l2Globals) {
+    if (global.globalKind != GeneratedGlobalKind::Input)
+      continue;
+    if (!normalizedNames.insert(normalizeSnakeCase(global.globalName)).second) {
+      llvm::errs() << "Runtime Input names do not have unique normalized forms\n";
+      return failure();
+    }
+    inputs[global.globalName] = &global;
+  }
+  for (StringRef assignment : magiaRuntimeInputs) {
+    auto [name, path] = assignment.split('=');
+    auto found = inputs.find(name);
+    if (path.empty() || found == inputs.end() ||
+        !found->second->runtimeInputFile.empty()) {
+      llvm::errs() << "invalid Runtime Input assignment '" << assignment
+                   << "'\n";
+      return failure();
+    }
+    auto contentsOrError = llvm::MemoryBuffer::getFile(
+        path, /*IsText=*/false, /*RequiresNullTerminator=*/false);
+    if (!contentsOrError ||
+        (*contentsOrError)->getBufferSize() !=
+            found->second->tensorBytes * model.numTokens) {
+      llvm::errs() << "invalid Runtime Input data for '" << name << "'\n";
+      return failure();
+    }
+    found->second->runtimeInputFile = path.str();
+    found->second->runtimeInputAsset =
+        model.outputStem + ".input_" + normalizeSnakeCase(name) + ".bin";
+  }
+  return success();
+}
+
 LogicalResult generateMagiaApplication(ModuleOp module,
                                        StringRef outputDirectory) {
   MagiaHeaderModel model;
   configureGeneratedRuntime(model);
   model.outputStem = normalizeSnakeCase(model.outputStem);
-  model.numTokens = 1;
   if (model.l2End <= model.l2Base ||
       failed(collectMagiaHeaderModel(module, model)) ||
       model.sourceModelName.empty() || model.meshWidth == 0 ||
-      model.meshHeight == 0 || !model.hasPackedWeights)
+      model.meshHeight == 0 || !model.hasPackedWeights || model.numTokens == 0 ||
+      failed(configureRuntimeInputs(model)))
     return failure();
 
   StringRef sourceInitializers = magiaWeightsFile.empty()
@@ -618,8 +674,22 @@ LogicalResult generateMagiaApplication(ModuleOp module,
   if (failed(writeBinaryArtifact(
           packageArtifactPath(outputDirectory,
                               "data/" + name + ".initializers.bin"),
-          initializers)) ||
-      failed(writeApplicationManifest(model, outputDirectory)))
+          initializers)))
+    return failure();
+  for (const GeneratedL2Global &global : model.l2Globals) {
+    if (global.runtimeInputFile.empty())
+      continue;
+    auto inputOrError = llvm::MemoryBuffer::getFile(
+        global.runtimeInputFile, /*IsText=*/false,
+        /*RequiresNullTerminator=*/false);
+    if (!inputOrError ||
+        failed(writeBinaryArtifact(
+            packageArtifactPath(outputDirectory,
+                                "data/" + global.runtimeInputAsset),
+            (*inputOrError)->getBuffer())))
+      return failure();
+  }
+  if (failed(writeApplicationManifest(model, outputDirectory)))
     return failure();
   return success();
 }
