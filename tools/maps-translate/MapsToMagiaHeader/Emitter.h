@@ -13,6 +13,19 @@ namespace mlir::maps {
 void emitDebugHeader(const MagiaHeaderModel &model, llvm::raw_ostream &os);
 void emitDataFile(const MagiaHeaderModel &model, llvm::raw_ostream &os);
 void emitWeightsAssembly(const MagiaHeaderModel &model, llvm::raw_ostream &os);
+void emitApplicationHeader(const MagiaHeaderModel &model,
+                           llvm::raw_ostream &os);
+void emitApplicationModelSource(const MagiaHeaderModel &model,
+                                llvm::raw_ostream &os);
+void emitApplicationRunner(const MagiaHeaderModel &model,
+                           llvm::raw_ostream &os);
+void emitInitialApplicationSource(const MagiaHeaderModel &model,
+                                  llvm::raw_ostream &os);
+void emitApplicationCMake(const MagiaHeaderModel &model, llvm::raw_ostream &os);
+void emitApplicationReadme(const MagiaHeaderModel &model,
+                           llvm::raw_ostream &os);
+void emitApplicationInitializersAssembly(const MagiaHeaderModel &model,
+                                         llvm::raw_ostream &os);
 
 } // namespace mlir::maps
 

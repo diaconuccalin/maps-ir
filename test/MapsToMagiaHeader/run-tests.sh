@@ -240,14 +240,107 @@ printf 'MAPS' > "${source_weights}"
 expert_output_dir="${test_dir}/expert-output"
 "${code_generator}" "${test_dir}/sigmoid.mlir" \
   --target=magia-v2 \
-  --maps-magia-output-stem=model \
+  --maps-magia-output-stem='My Model-v1' \
   --maps-magia-weights-file="${source_weights}" \
   -o "${expert_output_dir}"
-test -f "${expert_output_dir}/model.h"
-test -f "${expert_output_dir}/model_data.c"
-test -f "${expert_output_dir}/model_weights.S"
-test -f "${expert_output_dir}/model.weights.bin"
-test -f "${expert_output_dir}/manifest.json"
+for path in \
+  CMakeLists.txt README.md manifest.json \
+  include/my_model_v1.h \
+  src/my_model_v1.c src/my_model_v1_runner.c src/application.c \
+  src/my_model_v1_initializers.S.in \
+  data/my_model_v1.initializers.bin; do
+  test -f "${expert_output_dir}/${path}"
+done
+cmp "${source_weights}" \
+  "${expert_output_dir}/data/my_model_v1.initializers.bin"
+grep -q 'add_executable(my_model_v1' "${expert_output_dir}/CMakeLists.txt"
+grep -q 'runtime hal idma_lib redmule_lib fsync_lib eu_lib kernels_redmule kernels_generic' \
+  "${expert_output_dir}/CMakeLists.txt"
+grep -q 'configure_file' "${expert_output_dir}/CMakeLists.txt"
+grep -q '@CMAKE_CURRENT_SOURCE_DIR@/data/my_model_v1.initializers.bin' \
+  "${expert_output_dir}/src/my_model_v1_initializers.S.in"
+grep -q '.global my_model_v1_initializers_start' \
+  "${expert_output_dir}/src/my_model_v1_initializers.S.in"
+grep -q 'int my_model_v1_run(void);' \
+  "${expert_output_dir}/include/my_model_v1.h"
+grep -q 'void my_model_v1_handle_input(uint32_t token);' \
+  "${expert_output_dir}/include/my_model_v1.h"
+grep -q 'uint8_t \*my_model_v1_input_x(uint32_t token);' \
+  "${expert_output_dir}/include/my_model_v1.h"
+! grep -q 'slice_desc_t\|fifo_tile_plan_t\|maps_generated' \
+  "${expert_output_dir}/include/my_model_v1.h"
+grep -q 'my_model_v1_handle_input(0u)' \
+  "${expert_output_dir}/src/my_model_v1_runner.c"
+for initializer in idma_init redmule_init fsync_init eu_init; do
+  grep -q "${initializer}" "${expert_output_dir}/src/my_model_v1_runner.c"
+done
+grep -q 'my_model_v1_initialize_data(hartid)' \
+  "${expert_output_dir}/src/my_model_v1_runner.c"
+grep -q 'fsync_sync_global' "${expert_output_dir}/src/my_model_v1_runner.c"
+grep -q 'maps_fifo_run_tile_tokens(&plan, 1u' \
+  "${expert_output_dir}/src/my_model_v1_runner.c"
+grep -q 'my_model_v1_handle_output(0u)' \
+  "${expert_output_dir}/src/my_model_v1_runner.c"
+grep -q 'Only customize this source file' \
+  "${expert_output_dir}/src/application.c"
+grep -q 'checksum:' "${expert_output_dir}/src/application.c"
+! grep -Eqi 'expected|correct(ness)?' \
+  "${expert_output_dir}/src/application.c"
+! grep -Rq 'maps_generated' "${expert_output_dir}/include" \
+  "${expert_output_dir}/src"
+grep -q 'add_subdirectory(my_model_v1)' "${expert_output_dir}/README.md"
+grep -q 'cmake --build build --target my_model_v1' \
+  "${expert_output_dir}/README.md"
+grep -q 'src/application.c' "${expert_output_dir}/README.md"
+
+python3 - "${expert_output_dir}" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+application = Path(sys.argv[1])
+manifest = json.loads((application / "manifest.json").read_text())
+assert manifest["schema_version"] == 1
+assert manifest["application"] == {
+    "name": "my_model_v1",
+    "target": "magia-v2",
+}
+assert manifest["planned_mesh"] == {"width": 1, "height": 1}
+assert manifest["abi"] == {"operation": 1, "descriptor": 1}
+assert manifest["execution"] == {"tokens": 1, "token_slots": 2}
+assert manifest["active_physical_tiles"] == [0]
+assert manifest["tensors"]["inputs"][0]["original_name"] == "x"
+assert manifest["tensors"]["inputs"][0]["normalized_name"] == "x"
+assert manifest["tensors"]["inputs"][0]["shape"] == [2, 2]
+assert manifest["tensors"]["inputs"][0]["dtype"] == "float16"
+assert manifest["tensors"]["inputs"][0]["byte_size"] == 8
+assert manifest["tensors"]["outputs"][0]["original_name"] == \
+    "transition_1_source_0"
+assert manifest["memory"]["initializers_bytes"] == 4
+assert manifest["files"]["user_owned"] == ["src/application.c"]
+assert "src/my_model_v1_runner.c" in manifest["files"]["generated"]
+PY
+
+second_expert_output_dir="${test_dir}/second-expert-output"
+"${code_generator}" "${test_dir}/sigmoid.mlir" \
+  --target=magia-v2 \
+  --maps-magia-output-stem='My Model-v1' \
+  --maps-magia-weights-file="${source_weights}" \
+  -o "${second_expert_output_dir}"
+diff -r "${expert_output_dir}" "${second_expert_output_dir}"
+
+missing_identity_mlir="${test_dir}/missing-identity.mlir"
+sed 's/, maps.mesh_height = 1 : i64, maps.mesh_width = 1 : i64, maps.name = "sigmoid"//' \
+  "${test_dir}/sigmoid.mlir" > "${missing_identity_mlir}"
+if "${code_generator}" "${missing_identity_mlir}" \
+    --target=magia-v2 \
+    --maps-magia-output-stem=my_model_v1 \
+    --maps-magia-weights-file="${source_weights}" \
+    -o "${test_dir}/missing-identity-application" 2>/dev/null; then
+  echo "expected missing application identity failure" >&2
+  exit 1
+fi
+test ! -e "${test_dir}/missing-identity-application"
 
 "${translator}" --json-to-magia-package \
   --maps-magia-package-dir="${package_dir}" \

@@ -239,6 +239,7 @@ unsigned addGeneratedL2Write(MagiaHeaderModel &model, GeneratedL2Write write);
 void noteTile(MagiaHeaderModel &model, int64_t hartid);
 uint64_t alignTo(uint64_t value, uint64_t alignment);
 uint64_t product(ArrayRef<int64_t> values);
+std::string normalizeSnakeCase(StringRef value);
 uint64_t computeSlotBytes(const GeneratedSlice &slice);
 unsigned getElementByteWidth(Type type);
 SmallVector<uint64_t> computeContiguousStridesBytes(ArrayRef<int64_t> shape,

@@ -1,6 +1,8 @@
 #include "Model.h"
 #include "collectors/CollectorSupport.h"
 
+#include "llvm/ADT/StringExtras.h"
+
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Support/LogicalResult.h"
 
@@ -10,6 +12,35 @@
 #include <utility>
 
 namespace mlir::maps {
+
+std::string normalizeSnakeCase(StringRef value) {
+  std::string normalized;
+  bool separator = false;
+  bool previousWasLowerOrDigit = false;
+  for (char character : value) {
+    if (!llvm::isAlnum(character)) {
+      separator = !normalized.empty();
+      previousWasLowerOrDigit = false;
+      continue;
+    }
+    bool uppercase = llvm::isUpper(character);
+    if (!normalized.empty() &&
+        (separator || (uppercase && previousWasLowerOrDigit)) &&
+        normalized.back() != '_')
+      normalized.push_back('_');
+    normalized.push_back(llvm::toLower(character));
+    separator = false;
+    previousWasLowerOrDigit =
+        llvm::isLower(character) || llvm::isDigit(character);
+  }
+  while (!normalized.empty() && normalized.back() == '_')
+    normalized.pop_back();
+  if (normalized.empty())
+    return "application";
+  if (llvm::isDigit(normalized.front()))
+    normalized.insert(0, "application_");
+  return normalized;
+}
 
 static unsigned getOrCreateGlobalId(MagiaHeaderModel &model,
                                     StringRef globalName) {

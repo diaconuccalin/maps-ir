@@ -1,5 +1,6 @@
 #include "Emitter.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -881,6 +882,259 @@ void emitWeightsAssembly(const MagiaHeaderModel &model,
   os << ".global " << size << "\n";
   os << start << ":\n";
   os << ".incbin \"" << model.weightsFile << "\"\n";
+  os << end << ":\n";
+  os << ".set " << size << ", " << end << " - " << start << "\n";
+}
+
+static std::string uppercase(StringRef value) {
+  std::string result = value.str();
+  for (char &character : result)
+    character = llvm::toUpper(character);
+  return result;
+}
+
+static void replaceAll(std::string &text, StringRef from, StringRef to) {
+  size_t position = 0;
+  while ((position = text.find(from.str(), position)) != std::string::npos) {
+    text.replace(position, from.size(), to.str());
+    position += to.size();
+  }
+}
+
+static std::string
+emitWithApplicationSymbols(const MagiaHeaderModel &model,
+                           llvm::function_ref<void(llvm::raw_ostream &)> emit) {
+  std::string text;
+  llvm::raw_string_ostream stream(text);
+  emit(stream);
+  stream.flush();
+  replaceAll(text, "MAPS_GENERATED", uppercase(model.outputStem));
+  replaceAll(text, "maps_generated", model.outputStem);
+  replaceAll(text, model.outputStem + "_weights_",
+             model.outputStem + "_initializers_");
+  return text;
+}
+
+void emitApplicationHeader(const MagiaHeaderModel &model,
+                           llvm::raw_ostream &os) {
+  std::string guard = uppercase(model.outputStem) + "_H";
+  os << "#ifndef " << guard << "\n";
+  os << "#define " << guard << "\n\n";
+  os << "#include <stdint.h>\n\n";
+  os << "#define " << uppercase(model.outputStem) << "_EXECUTION_TOKENS 1u\n";
+  os << "#define " << uppercase(model.outputStem) << "_TOKEN_SLOTS "
+     << model.numTokenSlots << "u\n\n";
+  os << "int " << model.outputStem << "_run(void);\n";
+  os << "void " << model.outputStem << "_handle_input(uint32_t token);\n";
+  os << "void " << model.outputStem << "_handle_output(uint32_t token);\n\n";
+  for (const GeneratedL2Global &global : model.l2Globals) {
+    if (global.globalKind == GeneratedGlobalKind::Input)
+      os << "uint8_t *" << model.outputStem << "_input_"
+         << normalizeSnakeCase(global.globalName) << "(uint32_t token);\n";
+    if (global.globalKind == GeneratedGlobalKind::Output)
+      os << "const uint8_t *" << model.outputStem << "_output_"
+         << normalizeSnakeCase(global.globalName) << "(uint32_t token);\n";
+  }
+  os << "\n#endif /* " << guard << " */\n";
+}
+
+void emitApplicationModelSource(const MagiaHeaderModel &model,
+                                llvm::raw_ostream &os) {
+  os << emitWithApplicationSymbols(model, [&](llvm::raw_ostream &stream) {
+    emitDebugHeader(model, stream);
+  });
+  os << "\n";
+  os << emitWithApplicationSymbols(
+      model, [&](llvm::raw_ostream &stream) { emitDataFile(model, stream); });
+  os << "\nvoid " << model.outputStem
+     << "_initialize_data(uint32_t hartid) {\n";
+  os << "  " << model.outputStem << "_init_tensors(hartid);\n";
+  os << "}\n\n";
+  os << "uint32_t " << model.outputStem << "_build_plan(\n";
+  os << "    fifo_tile_plan_t *plan, uint32_t hartid,\n";
+  os << "    maps_operation_runtime_t *runtime) {\n";
+  os << "  return " << model.outputStem
+     << "_fill_plan(plan, hartid, runtime);\n";
+  os << "}\n\n";
+  for (const GeneratedL2Global &global : model.l2Globals) {
+    if (global.globalKind != GeneratedGlobalKind::Input &&
+        global.globalKind != GeneratedGlobalKind::Output)
+      continue;
+    StringRef direction =
+        global.globalKind == GeneratedGlobalKind::Input ? "input" : "output";
+    if (global.globalKind == GeneratedGlobalKind::Output)
+      os << "const ";
+    os << "uint8_t *" << model.outputStem << "_" << direction << "_"
+       << normalizeSnakeCase(global.globalName) << "(uint32_t token) {\n";
+    os << "  return " << model.outputStem << "_l2_global_" << global.modelIndex
+       << " + token * " << global.tokenStrideBytes << "u;\n";
+    os << "}\n\n";
+  }
+}
+
+void emitApplicationRunner(const MagiaHeaderModel &model,
+                           llvm::raw_ostream &os) {
+  os << "#include \"" << model.outputStem << ".h\"\n\n";
+  os << "#include \"fsync.h\"\n";
+  os << "#include \"redmule.h\"\n";
+  os << "#include \"tile.h\"\n";
+  os << "#include \"utils/maps_operations.h\"\n";
+  os << "#include \"utils/maps_utils_v2.h\"\n\n";
+  os << "#define " << uppercase(model.outputStem) << "_WAIT_MODE WFE\n\n";
+  os << "extern void " << model.outputStem
+     << "_initialize_data(uint32_t hartid);\n";
+  os << "extern uint32_t " << model.outputStem << "_build_plan(\n";
+  os << "    fifo_tile_plan_t *plan, uint32_t hartid,\n";
+  os << "    maps_operation_runtime_t *runtime);\n\n";
+  os << "int " << model.outputStem << "_run(void) {\n";
+  os << "  const uint32_t hartid = get_hartid();\n";
+  os << "  idma_config_t idma_config = {.hartid = hartid};\n";
+  os << "  idma_controller_t idma = {\n";
+  os << "      .base = 0, .cfg = &idma_config, .api = &idma_api};\n";
+  os << "  redmule_config_t redmule_config = {.hartid = hartid};\n";
+  os << "  redmule_controller_t redmule = {\n";
+  os << "      .base = 0, .cfg = &redmule_config, .api = &redmule_api};\n";
+  os << "  fsync_config_t fsync_config = {.hartid = hartid};\n";
+  os << "  fsync_controller_t fsync = {\n";
+  os << "      .base = 0, .cfg = &fsync_config, .api = &fsync_api};\n";
+  os << "  eu_config_t eu_config = {.hartid = hartid};\n";
+  os << "  eu_controller_t event_unit = {\n";
+  os << "      .base = 0, .cfg = &eu_config, .api = &eu_api};\n\n";
+  os << "  idma_init(&idma);\n";
+  os << "  redmule_init(&redmule);\n";
+  os << "  fsync_init(&fsync);\n";
+  os << "  eu_init(&event_unit);\n";
+  os << "  eu_clear_events(0xffffffffu);\n";
+  os << "  eu_fsync_init(&event_unit, 0u);\n";
+  os << "  eu_idma_init(&event_unit, 0u);\n";
+  os << "  eu_redmule_init(&event_unit, 0u);\n\n";
+  os << "  maps_operation_runtime_t runtime = {\n";
+  os << "      .redmule_ctrl = &redmule, .eu_ctrl = &event_unit};\n";
+  os << "  fifo_tile_plan_t plan;\n";
+  os << "  const uint32_t active = " << model.outputStem
+     << "_build_plan(&plan, hartid, &runtime);\n";
+  os << "  if (active)\n";
+  os << "    maps_fifo_init(&plan);\n\n";
+  os << "  fsync_sync_level(&fsync, MAX_SYNC_LVL - 1, 0);\n";
+  os << "  eu_fsync_wait(&event_unit, " << uppercase(model.outputStem)
+     << "_WAIT_MODE);\n";
+  os << "  " << model.outputStem << "_initialize_data(hartid);\n";
+  os << "  if (hartid == 0u)\n";
+  os << "    " << model.outputStem << "_handle_input(0u);\n";
+  os << "  fsync_sync_global(&fsync);\n";
+  os << "  eu_fsync_wait(&event_unit, " << uppercase(model.outputStem)
+     << "_WAIT_MODE);\n";
+  os << "  if (active)\n";
+  os << "    maps_fifo_init_tile(&plan, &idma, &event_unit);\n";
+  os << "  fsync_sync_global(&fsync);\n";
+  os << "  eu_fsync_wait(&event_unit, " << uppercase(model.outputStem)
+     << "_WAIT_MODE);\n";
+  os << "  if (active)\n";
+  os << "    maps_fifo_run_tile_tokens(&plan, 1u, &idma, &event_unit);\n";
+  os << "  fsync_sync_global(&fsync);\n";
+  os << "  eu_fsync_wait(&event_unit, " << uppercase(model.outputStem)
+     << "_WAIT_MODE);\n";
+  os << "  if (hartid == 0u)\n";
+  os << "    " << model.outputStem << "_handle_output(0u);\n";
+  os << "  return 0;\n";
+  os << "}\n\n";
+  os << "int main(void) { return " << model.outputStem << "_run(); }\n";
+}
+
+void emitInitialApplicationSource(const MagiaHeaderModel &model,
+                                  llvm::raw_ostream &os) {
+  os << "/* Only customize this source file. MAPS owns every other emitted "
+        "file. */\n";
+  os << "#include \"" << model.outputStem << ".h\"\n\n";
+  os << "#include <stddef.h>\n";
+  os << "#include \"utils/printf.h\"\n\n";
+  os << "void " << model.outputStem << "_handle_input(uint32_t token) {\n";
+  for (const GeneratedL2Global &global : model.l2Globals) {
+    if (global.globalKind != GeneratedGlobalKind::Input)
+      continue;
+    std::string name = normalizeSnakeCase(global.globalName);
+    os << "  uint8_t *" << name << " = " << model.outputStem << "_input_"
+       << name << "(token);\n";
+    os << "  for (size_t index = 0; index < " << global.tensorBytes
+       << "u; ++index)\n";
+    os << "    " << name << "[index] = (uint8_t)(index + token * 17u + "
+       << global.globalId << "u * 31u);\n";
+  }
+  os << "}\n\n";
+  os << "void " << model.outputStem << "_handle_output(uint32_t token) {\n";
+  for (const GeneratedL2Global &global : model.l2Globals) {
+    if (global.globalKind != GeneratedGlobalKind::Output)
+      continue;
+    std::string name = normalizeSnakeCase(global.globalName);
+    os << "  const uint8_t *" << name << " = " << model.outputStem << "_output_"
+       << name << "(token);\n";
+    os << "  uint32_t " << name << "_checksum = 2166136261u;\n";
+    os << "  for (size_t index = 0; index < " << global.tensorBytes
+       << "u; ++index)\n";
+    os << "    " << name << "_checksum = (" << name << "_checksum ^ " << name
+       << "[index]) * 16777619u;\n";
+    os << "  printf(\"" << model.outputStem << " token %u output "
+       << global.globalName << " checksum: %08x\\n\", token, " << name
+       << "_checksum);\n";
+  }
+  os << "}\n";
+}
+
+void emitApplicationCMake(const MagiaHeaderModel &model,
+                          llvm::raw_ostream &os) {
+  os << "set(MAPS_APPLICATION " << model.outputStem << ")\n\n";
+  os << "add_executable(" << model.outputStem << "\n";
+  os << "  src/application.c\n";
+  os << "  src/" << model.outputStem << ".c\n";
+  os << "  src/" << model.outputStem << "_runner.c\n";
+  os << ")\n";
+  os << "configure_file(\n";
+  os << "  src/" << model.outputStem << "_initializers.S.in\n";
+  os << "  ${CMAKE_CURRENT_BINARY_DIR}/" << model.outputStem
+     << "_initializers.S\n";
+  os << "  @ONLY\n";
+  os << ")\n";
+  os << "target_sources(" << model.outputStem
+     << " PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/" << model.outputStem
+     << "_initializers.S)\n";
+  os << "target_include_directories(" << model.outputStem
+     << " PUBLIC include)\n";
+  os << "target_compile_options(" << model.outputStem << " PRIVATE -O2)\n";
+  os << "target_link_libraries(" << model.outputStem
+     << " PUBLIC runtime hal idma_lib redmule_lib fsync_lib eu_lib "
+        "kernels_redmule kernels_generic)\n";
+}
+
+void emitApplicationReadme(const MagiaHeaderModel &model,
+                           llvm::raw_ostream &os) {
+  os << "# " << model.outputStem << "\n\n";
+  os << "Generated from `" << model.sourceModelName
+     << "` for the `magia-v2` Target and a " << model.meshWidth << " x "
+     << model.meshHeight << " planned Mesh.\n\n";
+  os << "Copy this directory into the MAGIA SDK application/test tree. Add "
+        "the following line to its parent `CMakeLists.txt`:\n\n";
+  os << "```cmake\nadd_subdirectory(" << model.outputStem << ")\n```\n\n";
+  os << "Configure the SDK normally, then build this application with:\n\n";
+  os << "```sh\ncmake --build build --target " << model.outputStem
+     << "\n```\n\n";
+  os << "Only `src/application.c` is developer-owned. Edit that file to "
+        "replace the generated input and output hooks; all other files are "
+        "generated by MAPS.\n";
+}
+
+void emitApplicationInitializersAssembly(const MagiaHeaderModel &model,
+                                         llvm::raw_ostream &os) {
+  std::string start = model.outputStem + "_initializers_start";
+  std::string end = model.outputStem + "_initializers_end";
+  std::string size = model.outputStem + "_initializers_size";
+  os << ".section .maps_initializers,\"a\",@progbits\n";
+  os << ".balign " << model.weightsAlignment << "\n";
+  os << ".global " << start << "\n";
+  os << ".global " << end << "\n";
+  os << ".global " << size << "\n";
+  os << start << ":\n";
+  os << ".incbin \"@CMAKE_CURRENT_SOURCE_DIR@/data/" << model.outputStem
+     << ".initializers.bin\"\n";
   os << end << ":\n";
   os << ".set " << size << ", " << end << " - " << start << "\n";
 }
