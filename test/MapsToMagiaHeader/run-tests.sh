@@ -238,7 +238,9 @@ package_dir="${test_dir}/package"
 source_weights="${test_dir}/source.weights.bin"
 printf 'MAPS' > "${source_weights}"
 expert_output_dir="${test_dir}/expert-output"
-"${code_generator}" "${test_dir}/sigmoid.mlir" \
+sed 's/maps.mesh_width = 1 : i64/maps.mesh_width = 2 : i64/' \
+  "${test_dir}/sigmoid.mlir" > "${test_dir}/sigmoid_with_inactive_tile.mlir"
+"${code_generator}" "${test_dir}/sigmoid_with_inactive_tile.mlir" \
   --target=magia-v2 \
   --maps-magia-output-stem='My Model-v1' \
   --maps-magia-weights-file="${source_weights}" \
@@ -247,6 +249,7 @@ for path in \
   CMakeLists.txt README.md manifest.json \
   include/my_model_v1.h \
   src/my_model_v1.c src/my_model_v1_runner.c src/application.c \
+  src/tiles/tile_00.c \
   src/my_model_v1_initializers.S.in \
   data/my_model_v1.initializers.bin; do
   test -f "${expert_output_dir}/${path}"
@@ -276,6 +279,23 @@ for initializer in idma_init redmule_init fsync_init eu_init; do
 done
 grep -q 'my_model_v1_initialize_data(hartid)' \
   "${expert_output_dir}/src/my_model_v1_runner.c"
+grep -q 'my_model_v1_build_tile_00_plan' \
+  "${expert_output_dir}/src/my_model_v1.c"
+! test -e "${expert_output_dir}/src/tiles/tile_01.c"
+grep -q '.l1_offset_bytes = ' \
+  "${expert_output_dir}/src/tiles/tile_00.c"
+grep -q '.num_slots = MY_MODEL_V1_NUM_TOKEN_SLOTS' \
+  "${expert_output_dir}/src/tiles/tile_00.c"
+grep -q '.slot_bytes = ' \
+  "${expert_output_dir}/src/tiles/tile_00.c"
+grep -q '.kind = OP_SIGMOID' \
+  "${expert_output_dir}/src/tiles/tile_00.c"
+grep -q 'my_model_v1_build_tile_00_plan' \
+  "${expert_output_dir}/src/tiles/tile_00.c"
+! grep -q 'static const slice_desc_t\|static const op_desc_t' \
+  "${expert_output_dir}/src/my_model_v1.c"
+grep -q 'uint8_t my_model_v1_l2_global_' \
+  "${expert_output_dir}/src/my_model_v1.c"
 grep -q 'fsync_sync_global' "${expert_output_dir}/src/my_model_v1_runner.c"
 grep -q 'maps_fifo_run_tile_tokens(&plan, 1u' \
   "${expert_output_dir}/src/my_model_v1_runner.c"
@@ -305,7 +325,7 @@ assert manifest["application"] == {
     "name": "my_model_v1",
     "target": "magia-v2",
 }
-assert manifest["planned_mesh"] == {"width": 1, "height": 1}
+assert manifest["planned_mesh"] == {"width": 2, "height": 1}
 assert manifest["abi"] == {"operation": 1, "descriptor": 1}
 assert manifest["execution"] == {"tokens": 1, "token_slots": 2}
 assert manifest["active_physical_tiles"] == [0]
@@ -319,15 +339,25 @@ assert manifest["tensors"]["outputs"][0]["original_name"] == \
 assert manifest["memory"]["initializers_bytes"] == 4
 assert manifest["files"]["user_owned"] == ["src/application.c"]
 assert "src/my_model_v1_runner.c" in manifest["files"]["generated"]
+assert "src/tiles/tile_00.c" in manifest["files"]["generated"]
 PY
 
 second_expert_output_dir="${test_dir}/second-expert-output"
-"${code_generator}" "${test_dir}/sigmoid.mlir" \
+"${code_generator}" "${test_dir}/sigmoid_with_inactive_tile.mlir" \
   --target=magia-v2 \
   --maps-magia-output-stem='My Model-v1' \
   --maps-magia-weights-file="${source_weights}" \
   -o "${second_expert_output_dir}"
 diff -r "${expert_output_dir}" "${second_expert_output_dir}"
+
+collective_output_dir="${test_dir}/collective-output"
+"${code_generator}" "${test_dir}/collective.mlir" \
+  --target=magia-v2 \
+  --maps-magia-output-stem=collective \
+  --maps-magia-weights-file="${test_dir}/collective.execution-plan.weights.bin" \
+  -o "${collective_output_dir}"
+test "$(find "${collective_output_dir}/src/tiles" -name 'tile_*.c' | wc -l)" -eq 4
+grep -Rq '.num_participants = 2u' "${collective_output_dir}/src/tiles"
 
 missing_identity_mlir="${test_dir}/missing-identity.mlir"
 sed 's/, maps.mesh_height = 1 : i64, maps.mesh_width = 1 : i64, maps.name = "sigmoid"//' \

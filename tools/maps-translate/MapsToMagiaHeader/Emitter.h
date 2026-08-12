@@ -17,6 +17,9 @@ void emitApplicationHeader(const MagiaHeaderModel &model,
                            llvm::raw_ostream &os);
 void emitApplicationModelSource(const MagiaHeaderModel &model,
                                 llvm::raw_ostream &os);
+void emitApplicationTileSource(const MagiaHeaderModel &model,
+                               const GeneratedTilePlan &plan,
+                               llvm::raw_ostream &os);
 void emitApplicationRunner(const MagiaHeaderModel &model,
                            llvm::raw_ostream &os);
 void emitInitialApplicationSource(const MagiaHeaderModel &model,
@@ -26,6 +29,8 @@ void emitApplicationReadme(const MagiaHeaderModel &model,
                            llvm::raw_ostream &os);
 void emitApplicationInitializersAssembly(const MagiaHeaderModel &model,
                                          llvm::raw_ostream &os);
+std::string getApplicationTileFilename(const MagiaHeaderModel &model,
+                                       int64_t hartid);
 
 } // namespace mlir::maps
 

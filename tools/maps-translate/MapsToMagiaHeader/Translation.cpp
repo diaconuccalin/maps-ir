@@ -447,6 +447,19 @@ applicationTensorEntry(const GeneratedL2Global &global) {
   };
 }
 
+static SmallVector<const GeneratedTilePlan *>
+getSortedApplicationTilePlans(const MagiaHeaderModel &model) {
+  SmallVector<const GeneratedTilePlan *> plans;
+  plans.reserve(model.tilePlans.size());
+  for (const auto &entry : model.tilePlans)
+    plans.push_back(&entry.second);
+  llvm::sort(plans, [](const GeneratedTilePlan *lhs,
+                       const GeneratedTilePlan *rhs) {
+    return lhs->hartid < rhs->hartid;
+  });
+  return plans;
+}
+
 static LogicalResult writeApplicationManifest(const MagiaHeaderModel &model,
                                               StringRef outputDirectory) {
   llvm::json::Array inputs;
@@ -466,9 +479,10 @@ static LogicalResult writeApplicationManifest(const MagiaHeaderModel &model,
 
   llvm::json::Array activeTiles;
   uint64_t maxTileDataBytes = 0;
-  for (const auto &tilePlan : model.tilePlans) {
-    activeTiles.push_back(tilePlan.first);
-    maxTileDataBytes = std::max(maxTileDataBytes, tilePlan.second.l1DataBytes);
+  for (const GeneratedTilePlan *tilePlan :
+       getSortedApplicationTilePlans(model)) {
+    activeTiles.push_back(tilePlan->hartid);
+    maxTileDataBytes = std::max(maxTileDataBytes, tilePlan->l1DataBytes);
   }
 
   std::string name = model.outputStem;
@@ -482,6 +496,11 @@ static LogicalResult writeApplicationManifest(const MagiaHeaderModel &model,
       "src/" + name + "_initializers.S.in",
       "data/" + name + ".initializers.bin",
   };
+  for (const GeneratedTilePlan *tilePlan :
+       getSortedApplicationTilePlans(model))
+    generatedFiles.push_back("src/tiles/" +
+                             getApplicationTileFilename(model,
+                                                        tilePlan->hartid));
   llvm::json::Array userOwnedFiles{"src/application.c"};
 
   llvm::json::Object manifest{
@@ -559,7 +578,8 @@ LogicalResult generateMagiaApplication(ModuleOp module,
   }
 
   for (StringRef directory : {StringRef(), StringRef("include"),
-                              StringRef("src"), StringRef("data")}) {
+                              StringRef("src"), StringRef("src/tiles"),
+                              StringRef("data")}) {
     std::string path = directory.empty()
                            ? outputDirectory.str()
                            : packageArtifactPath(outputDirectory, directory);
@@ -602,6 +622,15 @@ LogicalResult generateMagiaApplication(ModuleOp module,
             emitApplicationInitializersAssembly(model, os);
           })))
     return failure();
+  for (const GeneratedTilePlan *tilePlan :
+       getSortedApplicationTilePlans(model)) {
+    std::string path =
+        "src/tiles/" + getApplicationTileFilename(model, tilePlan->hartid);
+    if (failed(writeApplicationText(path, [&](llvm::raw_ostream &os) {
+          emitApplicationTileSource(model, *tilePlan, os);
+        })))
+      return failure();
+  }
   if (failed(writeBinaryArtifact(
           packageArtifactPath(outputDirectory,
                               "data/" + name + ".initializers.bin"),
