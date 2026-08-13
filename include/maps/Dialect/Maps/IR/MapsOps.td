@@ -224,6 +224,7 @@ def KernelOp : Maps_Op<"kernel"> {
     Variadic<AnyRankedTensor>:$inputs,
     StrAttr:$kind,
     DenseI64ArrayAttr:$params,
+    OptionalAttr<StrAttr>:$device_name,
     OptionalAttr<I64Attr>:$collective_stage_id,
     OptionalAttr<I64Attr>:$collective_layer_index,
     OptionalAttr<I64Attr>:$collective_group_id,

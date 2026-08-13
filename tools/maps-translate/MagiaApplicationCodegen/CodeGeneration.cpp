@@ -213,6 +213,11 @@ static LogicalResult writeApplicationManifest(const MagiaApplicationDescription 
     activeTiles.push_back(tilePlan->hartid);
     maxTileDataBytes = std::max(maxTileDataBytes, tilePlan->l1DataBytes);
   }
+  llvm::json::Array tasks;
+  SmallVector<GeneratedSpatzTask> requiredTasks =
+      getRequiredSpatzTasks(application);
+  for (const GeneratedSpatzTask &task : requiredTasks)
+    tasks.push_back(task.name);
 
   std::string name = application.outputStem;
   SmallVector<GeneratedArtifact> generatedArtifacts{
@@ -261,6 +266,11 @@ static LogicalResult writeApplicationManifest(const MagiaApplicationDescription 
     abi["task_bundle"] = kGeneratedTaskBundleVersion;
     memory["initializers_region"] = "l2_bulk";
     memory["runtime_region"] = "l2_arena";
+    uint64_t taskScratchBytes =
+        requiredTasks.empty() ? 0ull : kGeneratedTaskScratchBytes;
+    memory["task_scratch_bytes"] = static_cast<int64_t>(taskScratchBytes);
+    memory["max_tile_l1_bytes"] = static_cast<int64_t>(
+        maxTileDataBytes + taskScratchBytes);
   }
   llvm::json::Object manifest{
       {"schema_version", 1},
@@ -274,6 +284,7 @@ static LogicalResult writeApplicationManifest(const MagiaApplicationDescription 
        llvm::json::Object{{"tokens", application.numTokens},
                           {"token_slots", application.numTokenSlots}}},
       {"active_physical_tiles", std::move(activeTiles)},
+      {"tasks", std::move(tasks)},
       {"tensors", llvm::json::Object{{"inputs", std::move(inputs)},
                                      {"outputs", std::move(outputs)}}},
       {"entry_points",
@@ -345,6 +356,7 @@ LogicalResult generateMagiaApplication(ModuleOp module,
       failed(collectMagiaApplicationDescription(module, application)) ||
       application.sourceModelName.empty() || application.meshWidth == 0 ||
       application.meshHeight == 0 || !application.hasPackedWeights || application.numTokens == 0 ||
+      failed(validateSpatzTaskCoverage(application)) ||
       failed(configureRuntimeInputs(application)))
     return failure();
 

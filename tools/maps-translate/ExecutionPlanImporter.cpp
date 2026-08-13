@@ -911,6 +911,8 @@ static FailureOr<Value> emitDescriptorKernel(
     state.addTypes(*outputType);
     state.addAttribute("kind", builder.getStringAttr(*kind));
     state.addAttribute("params", builder.getDenseI64ArrayAttr(*params));
+    if (auto deviceName = layer.getString("device_name"))
+        state.addAttribute("device_name", builder.getStringAttr(*deviceName));
     if (*kind == "AllReduceSum" || *kind == "AllReduceMax") {
         auto *groups = layer.getArray("collective_groups");
         if (!groups)
@@ -2306,6 +2308,21 @@ importExecutionPlanDocument(StringRef input, MLIRContext *ctx) {
 
                 auto *payload = node->getObject("payload");
                 auto opName = payload ? payload->getString("op_name") : std::nullopt;
+                auto deviceName = layer->getString("device_name");
+                if (deviceName == "spatz") {
+                    auto *output = (*outputs)[0].getAsObject();
+                    auto kernel = output
+                        ? emitDescriptorKernel(
+                              loc, *node, *layer, layerEntry.index(), *inputs,
+                              *output, tileObj, stageObj, builder, tileValues)
+                        : FailureOr<Value>(failure());
+                    if (failed(kernel)) {
+                        llvm::errs() << "unsupported Spatz-assigned operation\n";
+                        return {};
+                    }
+                    tileValues[*outputTensorId] = *kernel;
+                    continue;
+                }
                 if (!opName ||
                     (*opName != "Exp" && *opName != "Log" &&
                      *opName != "Add")) {

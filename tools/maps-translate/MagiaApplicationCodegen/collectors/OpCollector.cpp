@@ -145,6 +145,8 @@ LogicalResult collectComputeOp(Operation *op, RunCollectionState &state,
 
   GeneratedOp generatedOp;
   generatedOp.ownerHartid = tileId.getInt();
+  if (auto device = op->getAttrOfType<StringAttr>("device_name"))
+    generatedOp.deviceName = device.getValue().str();
   if (isKernel) {
     auto kind = op->getAttrOfType<StringAttr>("kind");
     auto params = op->getAttrOfType<DenseI64ArrayAttr>("params");

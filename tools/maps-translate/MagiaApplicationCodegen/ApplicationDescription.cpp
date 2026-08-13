@@ -146,6 +146,46 @@ unsigned addGeneratedOp(MagiaApplicationDescription &application, GeneratedOp op
   return application.ops.back().descriptionIndex;
 }
 
+SmallVector<GeneratedSpatzTask>
+getRequiredSpatzTasks(const MagiaApplicationDescription &application) {
+  if (application.target != "magia-v3")
+    return {};
+  bool needsAdd = false;
+  bool needsRelu = false;
+  for (const GeneratedOp &op : application.ops) {
+    if (op.deviceName != "spatz")
+      continue;
+    needsAdd |= op.kind == GeneratedOpKind::Add;
+    needsRelu |= op.kind == GeneratedOpKind::Relu;
+  }
+
+  SmallVector<GeneratedSpatzTask> tasks;
+  if (needsAdd)
+    tasks.push_back({GeneratedOpKind::Add, "add_fp16_spatz_task",
+                     "add/spatz_task/add_fp16_spatz_task.c", "add/include",
+                     "ADD_FP16_SPATZ_TASK"});
+  if (needsRelu)
+    tasks.push_back({GeneratedOpKind::Relu, "relu_fp16_spatz_task",
+                     "relu/spatz_task/relu_fp16_spatz_task.c", "relu/include",
+                     "RELU_FP16_SPATZ_TASK"});
+  return tasks;
+}
+
+LogicalResult validateSpatzTaskCoverage(
+    const MagiaApplicationDescription &application) {
+  if (application.target != "magia-v3")
+    return success();
+  for (const GeneratedOp &op : application.ops) {
+    if (op.deviceName == "spatz" && op.kind != GeneratedOpKind::Add &&
+        op.kind != GeneratedOpKind::Relu) {
+      llvm::errs() << "MAGIA-v3 has no Tile-Local Spatz Task for "
+                   << static_cast<unsigned>(op.kind) << "\n";
+      return failure();
+    }
+  }
+  return success();
+}
+
 unsigned addGeneratedL2Write(MagiaApplicationDescription &application, GeneratedL2Write write) {
   write.descriptionIndex = application.l2Writes.size();
   application.l2Writes.push_back(write);

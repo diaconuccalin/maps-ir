@@ -951,12 +951,27 @@ void emitApplicationTileSource(const MagiaApplicationDescription &application,
 
 void emitApplicationRunner(const MagiaApplicationDescription &application,
                            llvm::raw_ostream &os) {
+  SmallVector<GeneratedSpatzTask> spatzTasks =
+      getRequiredSpatzTasks(application);
   os << "#include \"" << application.outputStem << ".h\"\n\n";
+  if (!spatzTasks.empty())
+    os << "#include \"" << application.outputStem << "_task_bin.h\"\n";
   os << "#include \"fsync.h\"\n";
   os << "#include \"redmule.h\"\n";
   os << "#include \"tile.h\"\n";
   os << "#include \"utils/maps_operations.h\"\n";
   os << "#include \"utils/maps_utils_v2.h\"\n\n";
+  if (!spatzTasks.empty()) {
+    os << "_Static_assert(MAPS_KERNEL_ABI_VERSION == "
+       << kGeneratedKernelAbiVersion
+       << "u, \"incompatible MAGIA kernel ABI\");\n";
+    os << "_Static_assert(MAPS_TASK_BUNDLE_ABI_VERSION == "
+       << kGeneratedTaskBundleVersion
+       << "u, \"incompatible Spatz task-bundle ABI\");\n\n";
+    os << "_Static_assert(MAPS_OPERATION_TASK_SCRATCH_BYTES == "
+       << kGeneratedTaskScratchBytes
+       << "u, \"incompatible Spatz task scratch contract\");\n\n";
+  }
   os << "#define " << uppercase(application.outputStem) << "_WAIT_MODE WFE\n\n";
   os << "extern void " << application.outputStem
      << "_initialize_data(uint32_t hartid);\n";
@@ -985,11 +1000,33 @@ void emitApplicationRunner(const MagiaApplicationDescription &application,
   os << "  eu_fsync_init(&event_unit, 0u);\n";
   os << "  eu_idma_init(&event_unit, 0u);\n";
   os << "  eu_redmule_init(&event_unit, 0u);\n\n";
-  os << "  maps_operation_runtime_t runtime = {\n";
-  os << "      .redmule_ctrl = &redmule, .eu_ctrl = &event_unit};\n";
+  os << "  maps_operation_runtime_t runtime;\n";
+  os << "  runtime.redmule_ctrl = &redmule;\n";
+  os << "  runtime.eu_ctrl = &event_unit;\n";
+  if (!spatzTasks.empty()) {
+    os << "  runtime.kernel_abi_version = " << kGeneratedKernelAbiVersion
+       << "u;\n";
+    os << "  runtime.task_bundle_abi_version = " << kGeneratedTaskBundleVersion
+       << "u;\n";
+    os << "  runtime.spatz_binary_start = SPATZ_BINARY_START;\n";
+    os << "  runtime.spatz_params = (void *)(get_l1_base(hartid) + "
+          "MAPS_OPERATION_TASK_SCRATCH_OFFSET);\n";
+    os << "  runtime.spatz_params_bytes = MAPS_OPERATION_TASK_SCRATCH_BYTES;\n";
+    os << "  runtime.spatz_initialized = 0u;\n";
+    for (const GeneratedSpatzTask &task : spatzTasks) {
+      if (task.kind == GeneratedOpKind::Add)
+        os << "  runtime.add_fp16_task = " << task.symbol << ";\n";
+      if (task.kind == GeneratedOpKind::Relu)
+        os << "  runtime.relu_fp16_task = " << task.symbol << ";\n";
+    }
+  }
   os << "  fifo_tile_plan_t plan;\n";
   os << "  const uint32_t active = " << application.outputStem
      << "_build_plan(&plan, hartid, &runtime);\n";
+  if (!spatzTasks.empty()) {
+    os << "  if (active && maps_operation_runtime_init(&runtime) != 0)\n";
+    os << "    return -1;\n";
+  }
   os << "  if (active)\n";
   os << "    maps_fifo_init(&plan);\n\n";
   os << "  fsync_sync_level(&fsync, MAX_SYNC_LVL - 1, 0);\n";
@@ -1084,7 +1121,22 @@ void emitInitialApplicationSource(const MagiaApplicationDescription &application
 
 void emitApplicationCMake(const MagiaApplicationDescription &application,
                           llvm::raw_ostream &os) {
+  SmallVector<GeneratedSpatzTask> spatzTasks =
+      getRequiredSpatzTasks(application);
   os << "set(MAPS_APPLICATION " << application.outputStem << ")\n\n";
+  if (!spatzTasks.empty()) {
+    os << "set(MAPS_SPATZ_KERNELS_DIR ${CMAKE_SOURCE_DIR}/kernels/spatz_fp16)\n";
+    os << "add_spatz_task(\n";
+    os << "  TEST_NAME ${MAPS_APPLICATION}\n";
+    os << "  TASK_SOURCES\n";
+    for (const GeneratedSpatzTask &task : spatzTasks)
+      os << "    ${MAPS_SPATZ_KERNELS_DIR}/" << task.source << "\n";
+    os << "  FIRST_TASK_NAME " << spatzTasks.front().name << "\n";
+    os << "  INCLUDE_DIRS\n";
+    for (const GeneratedSpatzTask &task : spatzTasks)
+      os << "    ${MAPS_SPATZ_KERNELS_DIR}/" << task.includeDirectory << "\n";
+    os << ")\n\n";
+  }
   os << "add_executable(" << application.outputStem << "\n";
   os << "  src/application.c\n";
   os << "  src/" << application.outputStem << ".c\n";
@@ -1110,6 +1162,20 @@ void emitApplicationCMake(const MagiaApplicationDescription &application,
   if (application.target != "magia-v3")
     os << " kernels_redmule kernels_generic";
   os << ")\n";
+  if (!spatzTasks.empty()) {
+    os << "target_embed_spatz_task(\n";
+    os << "  TARGET ${MAPS_APPLICATION}\n";
+    os << "  TASK_NAME ${MAPS_APPLICATION}\n";
+    os << ")\n";
+    os << "target_compile_definitions(${MAPS_APPLICATION} PRIVATE\n";
+    for (const GeneratedSpatzTask &task : spatzTasks) {
+      if (task.kind == GeneratedOpKind::Add)
+        os << "  MAPS_HAS_ADD_SPATZ_TASK=1\n";
+      if (task.kind == GeneratedOpKind::Relu)
+        os << "  MAPS_HAS_RELU_SPATZ_TASK=1\n";
+    }
+    os << ")\n";
+  }
 }
 
 void emitApplicationReadme(const MagiaApplicationDescription &application,

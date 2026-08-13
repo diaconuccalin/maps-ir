@@ -20,6 +20,7 @@ namespace mlir::maps {
 static constexpr uint64_t kMagiaL1UsableBytes = 896ull * 1024ull;
 static constexpr uint64_t kGeneratedL1DataBaseOffset = 0ull;
 static constexpr uint64_t kGeneratedL1AlignmentBytes = 16ull;
+static constexpr uint64_t kGeneratedTaskScratchBytes = 0x10000ull;
 static constexpr uint64_t kGeneratedReadyFlagsOffset = 0xD0000ull;
 static constexpr unsigned kGeneratedReadyFlagsWords = 4096;
 static constexpr unsigned kGeneratedDescriptorMaxDims = 6;
@@ -164,12 +165,21 @@ struct GeneratedOp {
   unsigned descriptionIndex = 0;
   int64_t ownerHartid = -1;
   GeneratedOpKind kind = GeneratedOpKind::Copy;
+  std::string deviceName;
   SmallVector<unsigned> inputSubsliceIndices;
   SmallVector<unsigned> outputSubsliceIndices;
   bool isCollective = false;
   GeneratedCollectiveIdentity collectiveIdentity;
   SmallVector<unsigned> collectiveParticipants;
   uint32_t params[8] = {};
+};
+
+struct GeneratedSpatzTask {
+  GeneratedOpKind kind;
+  StringRef name;
+  StringRef source;
+  StringRef includeDirectory;
+  StringRef symbol;
 };
 
 struct GeneratedL2Write {
@@ -240,6 +250,10 @@ unsigned getOrCreateTransitionId(MagiaApplicationDescription &application, Strin
 unsigned addGeneratedRecv(MagiaApplicationDescription &application, GeneratedRecv recv);
 unsigned addGeneratedSend(MagiaApplicationDescription &application, GeneratedSend send);
 unsigned addGeneratedOp(MagiaApplicationDescription &application, GeneratedOp op);
+SmallVector<GeneratedSpatzTask>
+getRequiredSpatzTasks(const MagiaApplicationDescription &application);
+LogicalResult validateSpatzTaskCoverage(
+    const MagiaApplicationDescription &application);
 unsigned addGeneratedL2Write(MagiaApplicationDescription &application, GeneratedL2Write write);
 void noteTile(MagiaApplicationDescription &application, int64_t hartid);
 uint64_t alignTo(uint64_t value, uint64_t alignment);
