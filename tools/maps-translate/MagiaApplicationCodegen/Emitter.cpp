@@ -44,6 +44,24 @@ static void emitGeneratedPrelude(const MagiaApplicationDescription &application,
      << kGeneratedReadyFlagsOffset << "u\n";
   os << "#define MAPS_APPLICATION_READY_FLAGS_WORDS "
      << kGeneratedReadyFlagsWords << "u\n\n";
+  if (application.target == "magia-v3") {
+    os << "#define MAPS_V3_TASK_SCRATCH_OFFSET 0xC0000u\n";
+    os << "#define MAPS_V3_TASK_SCRATCH_BYTES 0x10000u\n";
+    os << "#define MAPS_V3_STACK_OFFSET 0xE0000u\n";
+    os << "#define MAPS_V3_CONTROL_OFFSET 0xF0000u\n";
+    os << "#define MAPS_V3_L1_BYTES 0x100000u\n";
+    os << "_Static_assert(MAPS_V3_TASK_SCRATCH_OFFSET + "
+          "MAPS_V3_TASK_SCRATCH_BYTES <= "
+          "MAPS_APPLICATION_READY_FLAGS_OFFSET, \"task scratch overlaps "
+          "ready state\");\n";
+    os << "_Static_assert(MAPS_APPLICATION_READY_FLAGS_OFFSET + "
+          "MAPS_APPLICATION_READY_FLAGS_WORDS * sizeof(uint32_t) <= "
+          "MAPS_V3_STACK_OFFSET, \"ready state overlaps stack\");\n";
+    os << "_Static_assert(MAPS_V3_STACK_OFFSET < MAPS_V3_CONTROL_OFFSET, "
+          "\"stack overlaps control state\");\n";
+    os << "_Static_assert(MAPS_V3_CONTROL_OFFSET < MAPS_V3_L1_BYTES, "
+          "\"control state exceeds L1\");\n\n";
+  }
   os << "#ifndef MAPS_NUM_TOKENS\n";
   os << "#define MAPS_NUM_TOKENS MAPS_APPLICATION_NUM_TOKENS\n";
   os << "#endif\n\n";
@@ -658,7 +676,10 @@ static void emitApplicationDataDefinitions(
       continue;
     os << "uint8_t " << getL2GlobalSymbol(global) << "["
        << getL2GlobalAllocationBytes(global)
-       << "] __attribute__((aligned(16)));\n";
+       << "] __attribute__((aligned(16)";
+    if (application.target == "magia-v3")
+      os << ", section(\".l2_arena.maps_application\")";
+    os << "));\n";
   }
 
   if (application.randomizeInputs) {
@@ -780,6 +801,8 @@ static std::string emitWithApplicationSymbols(
   stream.flush();
   replaceAll(text, "MAPS_APPLICATION", uppercase(application.outputStem));
   replaceAll(text, "maps_application", application.outputStem);
+  replaceAll(text, ".l2_arena." + application.outputStem,
+             ".l2_arena.maps_application");
   replaceAll(text, application.outputStem + "_weights_",
              application.outputStem + "_initializers_");
   return text;
@@ -863,6 +886,13 @@ static void emitApplicationTilePlanConstructor(
     const MagiaApplicationDescription &application, const GeneratedTilePlan &plan,
     llvm::raw_ostream &os) {
   uint64_t fifoSlotDataSize = getFifoSlotDataSize(application, plan);
+  if (application.target == "magia-v3") {
+    os << "_Static_assert(";
+    emitL1DataBaseOffset(application, plan.hartid, os);
+    os << " + " << plan.l1DataBytes
+       << "u <= MAPS_V3_TASK_SCRATCH_OFFSET, "
+          "\"FIFO and planned L1 data overlap task scratch\");\n\n";
+  }
   os << "uint32_t maps_application_build_tile_"
      << getPaddedPhysicalTileId(application, plan.hartid) << "_plan(\n";
   os << "    fifo_tile_plan_t *plan,\n";
@@ -1076,15 +1106,18 @@ void emitApplicationCMake(const MagiaApplicationDescription &application,
      << " PUBLIC include)\n";
   os << "target_compile_options(" << application.outputStem << " PRIVATE -O2)\n";
   os << "target_link_libraries(" << application.outputStem
-     << " PUBLIC runtime hal idma_lib redmule_lib fsync_lib eu_lib "
-        "kernels_redmule kernels_generic)\n";
+     << " PUBLIC runtime hal idma_lib redmule_lib fsync_lib eu_lib";
+  if (application.target != "magia-v3")
+    os << " kernels_redmule kernels_generic";
+  os << ")\n";
 }
 
 void emitApplicationReadme(const MagiaApplicationDescription &application,
                            llvm::raw_ostream &os) {
   os << "# " << application.outputStem << "\n\n";
   os << "Generated from `" << application.sourceModelName
-     << "` for the `magia-v2` Target and a " << application.meshWidth << " x "
+     << "` for the `" << application.target << "` Target and a "
+     << application.meshWidth << " x "
      << application.meshHeight << " planned Mesh.\n\n";
   os << "Copy this directory into the MAGIA SDK application/test tree. Add "
         "the following line to its parent `CMakeLists.txt`:\n\n";
@@ -1102,7 +1135,10 @@ void emitApplicationInitializersAssembly(const MagiaApplicationDescription &appl
   std::string start = application.outputStem + "_initializers_start";
   std::string end = application.outputStem + "_initializers_end";
   std::string size = application.outputStem + "_initializers_size";
-  os << ".section .maps_initializers,\"a\",@progbits\n";
+  os << ".section "
+     << (application.target == "magia-v3" ? ".l2_bulk.maps_initializers"
+                                           : ".maps_initializers")
+     << ",\"a\",@progbits\n";
   os << ".balign " << application.weightsAlignment << "\n";
   os << ".global " << start << "\n";
   os << ".global " << end << "\n";
@@ -1118,7 +1154,10 @@ void emitApplicationInitializersAssembly(const MagiaApplicationDescription &appl
     start = getRuntimeInputSymbol(application, global, "start");
     end = getRuntimeInputSymbol(application, global, "end");
     size = getRuntimeInputSymbol(application, global, "size");
-    os << "\n.section .maps_runtime_inputs,\"a\",@progbits\n";
+    os << "\n.section "
+       << (application.target == "magia-v3" ? ".l2_bulk.maps_runtime_inputs"
+                                             : ".maps_runtime_inputs")
+       << ",\"a\",@progbits\n";
     os << ".balign " << kGeneratedL2AlignmentBytes << "\n";
     os << ".global " << start << "\n";
     os << ".global " << end << "\n";

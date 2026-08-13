@@ -55,7 +55,8 @@ static llvm::cl::list<std::string> magiaRuntimeInputs(
     llvm::cl::ZeroOrMore);
 
 static void configureGeneratedRuntime(
-    MagiaApplicationDescription &application) {
+    MagiaApplicationDescription &application, StringRef target) {
+  application.target = target.str();
   application.numTokens = magiaNumTokens;
   application.outputStem = magiaOutputStem;
   application.l2Base = magiaL2Base;
@@ -245,18 +246,30 @@ static LogicalResult writeApplicationManifest(const MagiaApplicationDescription 
       {"role", "application_manifest"},
   }};
 
+  llvm::json::Object abi{
+      {"operation", kGeneratedOperationAbiVersion},
+      {"descriptor", kGeneratedDescriptorAbiVersion},
+  };
+  llvm::json::Object memory{
+      {"initializers_bytes", static_cast<int64_t>(application.weightsSize)},
+      {"required_l2_bytes",
+       static_cast<int64_t>(application.nextL2Address - application.l2Base)},
+      {"max_tile_l1_bytes", static_cast<int64_t>(maxTileDataBytes)},
+  };
+  if (application.target == "magia-v3") {
+    abi["kernel"] = kGeneratedKernelAbiVersion;
+    abi["task_bundle"] = kGeneratedTaskBundleVersion;
+    memory["initializers_region"] = "l2_bulk";
+    memory["runtime_region"] = "l2_arena";
+  }
   llvm::json::Object manifest{
       {"schema_version", 1},
       {"application",
-       llvm::json::Object{{"name", name}, {"target", "magia-v2"}}},
+       llvm::json::Object{{"name", name}, {"target", application.target}}},
       {"source_model", application.sourceModelName},
       {"planned_mesh", llvm::json::Object{{"width", application.meshWidth},
                                           {"height", application.meshHeight}}},
-      {"abi",
-       llvm::json::Object{
-           {"operation", kGeneratedOperationAbiVersion},
-           {"descriptor", kGeneratedDescriptorAbiVersion},
-       }},
+      {"abi", std::move(abi)},
       {"execution",
        llvm::json::Object{{"tokens", application.numTokens},
                           {"token_slots", application.numTokenSlots}}},
@@ -269,13 +282,7 @@ static LogicalResult writeApplicationManifest(const MagiaApplicationDescription 
            {"handle_input", name + "_handle_input"},
            {"handle_output", name + "_handle_output"},
        }},
-      {"memory",
-       llvm::json::Object{
-           {"initializers_bytes", static_cast<int64_t>(application.weightsSize)},
-           {"required_l2_bytes",
-            static_cast<int64_t>(application.nextL2Address - application.l2Base)},
-           {"max_tile_l1_bytes", static_cast<int64_t>(maxTileDataBytes)},
-       }},
+      {"memory", std::move(memory)},
       {"files", llvm::json::Object{{"generated", std::move(*generatedFiles)},
                                    {"trust_root", std::move(trustRootFiles)},
                                    {"user_owned", std::move(userOwnedFiles)}}},
@@ -324,14 +331,15 @@ static LogicalResult configureRuntimeInputs(MagiaApplicationDescription &applica
 }
 
 LogicalResult generateMagiaApplication(ModuleOp module,
-                                       StringRef outputDirectory) {
+                                       StringRef outputDirectory,
+                                       StringRef target) {
   if (llvm::sys::fs::exists(outputDirectory)) {
     llvm::errs() << "application output already exists: " << outputDirectory
                  << "\n";
     return failure();
   }
   MagiaApplicationDescription application;
-  configureGeneratedRuntime(application);
+  configureGeneratedRuntime(application, target);
   application.outputStem = normalizeSnakeCase(application.outputStem);
   if (application.l2End <= application.l2Base ||
       failed(collectMagiaApplicationDescription(module, application)) ||

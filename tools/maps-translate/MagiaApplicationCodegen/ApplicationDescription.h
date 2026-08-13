@@ -25,6 +25,8 @@ static constexpr unsigned kGeneratedReadyFlagsWords = 4096;
 static constexpr unsigned kGeneratedDescriptorMaxDims = 6;
 static constexpr unsigned kGeneratedOperationAbiVersion = 1;
 static constexpr unsigned kGeneratedDescriptorAbiVersion = 1;
+static constexpr unsigned kGeneratedKernelAbiVersion = 1;
+static constexpr unsigned kGeneratedTaskBundleVersion = 1;
 static constexpr uint64_t kMagiaL2Base = 0xCC010000ull;
 static constexpr uint64_t kMagiaL2End = 0xCCF10000ull;
 static constexpr uint64_t kGeneratedL2AlignmentBytes = 16ull;
@@ -193,6 +195,7 @@ struct GeneratedTilePlan {
 };
 
 struct MagiaApplicationDescription {
+  std::string target = "magia-v2";
   std::string outputStem = "application";
   std::string sourceModelName;
   unsigned meshWidth = 0;

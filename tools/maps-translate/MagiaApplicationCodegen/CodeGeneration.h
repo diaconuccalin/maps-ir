@@ -10,7 +10,8 @@ class ModuleOp;
 namespace maps {
 
 LogicalResult generateMagiaApplication(ModuleOp module,
-                                       llvm::StringRef outputDirectory);
+                                       llvm::StringRef outputDirectory,
+                                       llvm::StringRef target);
 
 } // namespace maps
 } // namespace mlir

@@ -30,6 +30,10 @@ static LogicalResult collectDeploymentIdentity(ModuleOp module,
                                                MagiaApplicationDescription &application) {
   if (auto name = module->getAttrOfType<StringAttr>("maps.name"))
     application.sourceModelName = name.getValue().str();
+  if (auto target = module->getAttrOfType<StringAttr>("maps.target")) {
+    if (target.getValue() != application.target)
+      return failure();
+  }
 
   auto meshWidth = module->getAttrOfType<IntegerAttr>("maps.mesh_width");
   auto meshHeight = module->getAttrOfType<IntegerAttr>("maps.mesh_height");

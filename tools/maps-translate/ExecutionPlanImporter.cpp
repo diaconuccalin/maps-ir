@@ -1430,6 +1430,8 @@ importExecutionPlanDocument(StringRef input, MLIRContext *ctx) {
     Location loc = builder.getUnknownLoc();
     auto module = ModuleOp::create(loc);
     module->setAttr("maps.name", builder.getStringAttr(*netName));
+    if (auto target = root->getString("target"))
+        module->setAttr("maps.target", builder.getStringAttr(*target));
 
     auto *execution = root->getObject("execution");
     auto numTokenSlots = execution

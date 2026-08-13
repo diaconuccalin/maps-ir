@@ -27,7 +27,7 @@ int main(int argc, char **argv) {
       llvm::cl::init("magia-v2"));
   llvm::cl::ParseCommandLineOptions(argc, argv,
                                    "Generate a Target application from maps MLIR\n");
-  if (target != "magia-v2") {
+  if (target != "magia-v2" && target != "magia-v3") {
     llvm::errs() << "unsupported code-generation target '" << target << "'\n";
     return 1;
   }
@@ -43,5 +43,5 @@ int main(int argc, char **argv) {
   if (!module || failed(mlir::verify(*module)))
     return 1;
   return failed(mlir::maps::generateMagiaApplication(
-      *module, outputDirectory)) ? 1 : 0;
+      *module, outputDirectory, target)) ? 1 : 0;
 }
