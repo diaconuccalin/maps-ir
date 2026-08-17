@@ -781,6 +781,10 @@ getDescriptorKernelKind(const llvm::json::Object &payload) {
     auto workKind = payload.getString("work_kind");
     auto opName = payload.getString("op_name");
     StringRef kind = workKind ? *workKind : opName.value_or("");
+    if (kind == "Im2Col")
+        kind = "IM2COL";
+    else if (kind == "OutputReformat")
+        kind = "OUTPUT_REFORMAT";
     if (kind.empty() && payload.getBoolean("transpose_w").value_or(false))
         kind = "MATMUL";
 
@@ -789,7 +793,8 @@ getDescriptorKernelKind(const llvm::json::Object &payload) {
 
     static constexpr StringLiteral supportedKinds[] = {
         "ABS",          "ADD",          "DEPTHWISE_CONV", "DIV",
-        "EXP",          "GROUP_NORMALIZE", "GROUP_REDUCE", "LOG",
+        "EXP",          "SOFTMAX_EXP",  "GROUP_NORMALIZE", "GROUP_REDUCE",
+        "GROUP_CENTERED_REDUCE", "IM2COL", "OUTPUT_REFORMAT", "SPLIT", "LOG",
         "MATMUL",       "MUL",          "NEG",            "POW",
         "REDUCE_MAX",
         "REDUCE_SUM",   "RELU",         "RESHAPE",        "SIGMOID",
@@ -826,18 +831,32 @@ getDescriptorKernelParams(StringRef kind, const llvm::json::Object &payload) {
         if (!axis)
             return std::nullopt;
         params.push_back(*axis);
-    } else if (kind == "GROUP_REDUCE") {
+    } else if (kind == "GROUP_REDUCE" ||
+               kind == "GROUP_CENTERED_REDUCE") {
         auto groups = payload.getInteger("num_groups");
-        if (!groups)
+        auto elementsPerGroup = payload.getInteger("element_count_per_group");
+        auto channelsPerGroup = payload.getInteger("channel_count_per_group");
+        if (!groups || !elementsPerGroup || !channelsPerGroup)
             return std::nullopt;
         params.push_back(*groups);
+        params.push_back(*elementsPerGroup);
+        params.push_back(*channelsPerGroup);
     } else if (kind == "GROUP_NORMALIZE") {
         auto groups = payload.getInteger("num_groups");
         auto epsilon = payload.getNumber("epsilon");
-        if (!groups || !epsilon)
+        auto elementsPerGroup = payload.getInteger("element_count_per_group");
+        auto channelsPerGroup = payload.getInteger("channel_count_per_group");
+        if (!groups || !epsilon || !elementsPerGroup || !channelsPerGroup)
             return std::nullopt;
         params.push_back(*groups);
         params.push_back(getF32ParameterBits(*epsilon));
+        params.push_back(*elementsPerGroup);
+        params.push_back(*channelsPerGroup);
+    } else if (kind == "SPLIT") {
+        auto axis = payload.getInteger("axis");
+        if (!axis)
+            return std::nullopt;
+        params.push_back(*axis);
     } else if (kind == "MUL") {
         if (auto factor = payload.getNumber("factor"))
             params.push_back(getF32ParameterBits(*factor));
@@ -955,6 +974,57 @@ static FailureOr<Value> emitDescriptorKernel(
             return failure();
     }
     return builder.create(state)->getResult(0);
+}
+
+static FailureOr<SmallVector<Value>> emitSplitDescriptorKernel(
+    Location loc, const llvm::json::Object &node,
+    const llvm::json::Object &layer, const llvm::json::Array &inputs,
+    const llvm::json::Array &outputs, const Tile &tile, const Stage &stage,
+    OpBuilder &builder, llvm::DenseMap<int64_t, Value> &tileValues) {
+    auto *payload = node.getObject("payload");
+    auto *nodeOutputs = node.getArray("outputs");
+    if (!payload || !nodeOutputs || nodeOutputs->size() != outputs.size())
+        return failure();
+    auto params = getDescriptorKernelParams("SPLIT", *payload);
+    if (!params)
+        return failure();
+
+    SmallVector<Value> inputValues;
+    for (const llvm::json::Value &input : inputs) {
+        auto tensorId = getTensorId(input);
+        Value value = tensorId ? tileValues.lookup(*tensorId) : Value{};
+        if (!value)
+            return failure();
+        inputValues.push_back(value);
+    }
+    if (inputValues.size() != 1)
+        return failure();
+    auto inputType = dyn_cast<RankedTensorType>(inputValues.front().getType());
+    if (!inputType)
+        return failure();
+
+    SmallVector<Type> outputTypes;
+    for (unsigned index = 0; index < outputs.size(); ++index) {
+        auto *nodeOutput = (*nodeOutputs)[index].getAsObject();
+        auto *output = outputs[index].getAsObject();
+        auto outputType = nodeOutput && output
+            ? parseTileOutputType(*nodeOutput, *output, tile, stage,
+                                  inputType.getElementType())
+            : std::nullopt;
+        if (!outputType)
+            return failure();
+        outputTypes.push_back(*outputType);
+    }
+
+    OperationState state(loc, maps::KernelOp::getOperationName());
+    state.addOperands(inputValues);
+    state.addTypes(outputTypes);
+    state.addAttribute("kind", builder.getStringAttr("SPLIT"));
+    state.addAttribute("params", builder.getDenseI64ArrayAttr(*params));
+    if (auto deviceName = layer.getString("device_name"))
+        state.addAttribute("device_name", builder.getStringAttr(*deviceName));
+    Operation *kernel = builder.create(state);
+    return SmallVector<Value>(kernel->getResults());
 }
 
 
@@ -2085,9 +2155,29 @@ importExecutionPlanDocument(StringRef input, MLIRContext *ctx) {
                                            ? (*nodeOutputs)[0].getAsObject()
                                            : nullptr;
                     auto *output = (*outputs)[0].getAsObject();
-                    if (workKind &&
+                    if (workKind == "SPLIT") {
+                        auto kernels = emitSplitDescriptorKernel(
+                            loc, *node, *layer, *inputs, *outputs, tileObj,
+                            stageObj, builder, tileValues);
+                        if (failed(kernels) || kernels->size() != outputs->size()) {
+                            llvm::errs() << "unsupported Split descriptor\n";
+                            return {};
+                        }
+                        for (unsigned index = 0; index < outputs->size(); ++index) {
+                            auto tensorId = getTensorId((*outputs)[index]);
+                            if (!tensorId) {
+                                llvm::errs() << "Split output is missing tensor id\n";
+                                return {};
+                            }
+                            tileValues[*tensorId] = (*kernels)[index];
+                        }
+                        continue;
+                    }
+                    if ((workKind &&
                         (*workKind == "RESHAPE" || *workKind == "SLICE" ||
-                         *workKind == "TRANSPOSE")) {
+                         *workKind == "TRANSPOSE")) ||
+                        (opName && (*opName == "Im2Col" ||
+                                    *opName == "OutputReformat"))) {
                         auto kernel = output
                             ? emitDescriptorKernel(
                                   loc, *node, *layer, layerEntry.index(),

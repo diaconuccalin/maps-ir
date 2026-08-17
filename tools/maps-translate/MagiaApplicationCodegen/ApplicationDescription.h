@@ -24,10 +24,10 @@ static constexpr uint64_t kGeneratedTaskScratchBytes = 0x10000ull;
 static constexpr uint64_t kGeneratedReadyFlagsOffset = 0xD0000ull;
 static constexpr unsigned kGeneratedReadyFlagsWords = 4096;
 static constexpr unsigned kGeneratedDescriptorMaxDims = 6;
-static constexpr unsigned kGeneratedOperationAbiVersion = 1;
+static constexpr unsigned kGeneratedOperationAbiVersion = 2;
 static constexpr unsigned kGeneratedDescriptorAbiVersion = 1;
-static constexpr unsigned kGeneratedKernelAbiVersion = 1;
-static constexpr unsigned kGeneratedTaskBundleVersion = 1;
+static constexpr unsigned kGeneratedKernelAbiVersion = 2;
+static constexpr unsigned kGeneratedTaskBundleVersion = 2;
 static constexpr uint64_t kMagiaL2Base = 0xCC010000ull;
 static constexpr uint64_t kMagiaL2End = 0xCCF10000ull;
 static constexpr uint64_t kGeneratedL2AlignmentBytes = 16ull;
@@ -49,8 +49,13 @@ enum class GeneratedOpKind {
   Div,
   Log,
   Exp,
+  SoftmaxExp,
   GroupNormalize,
   GroupReduce,
+  GroupCenteredReduce,
+  Im2Col,
+  OutputReformat,
+  Split,
   Mul,
   Neg,
   Pow,
@@ -180,6 +185,8 @@ struct GeneratedSpatzTask {
   StringRef source;
   StringRef includeDirectory;
   StringRef symbol;
+  StringRef runtimeField;
+  StringRef featureMacro;
 };
 
 struct GeneratedL2Write {

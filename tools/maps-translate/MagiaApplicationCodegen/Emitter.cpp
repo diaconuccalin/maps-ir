@@ -186,10 +186,20 @@ static StringRef getOpKindName(GeneratedOpKind kind) {
     return "OP_LOG";
   case GeneratedOpKind::Exp:
     return "OP_EXP";
+  case GeneratedOpKind::SoftmaxExp:
+    return "OP_SOFTMAX_EXP";
   case GeneratedOpKind::GroupNormalize:
     return "OP_GROUP_NORMALIZE";
   case GeneratedOpKind::GroupReduce:
     return "OP_GROUP_REDUCE";
+  case GeneratedOpKind::GroupCenteredReduce:
+    return "OP_GROUP_CENTERED_REDUCE";
+  case GeneratedOpKind::Im2Col:
+    return "OP_IM2COL";
+  case GeneratedOpKind::OutputReformat:
+    return "OP_OUTPUT_REFORMAT";
+  case GeneratedOpKind::Split:
+    return "OP_SPLIT";
   case GeneratedOpKind::Mul:
     return "OP_MUL";
   case GeneratedOpKind::Neg:
@@ -961,6 +971,9 @@ void emitApplicationRunner(const MagiaApplicationDescription &application,
   os << "#include \"tile.h\"\n";
   os << "#include \"utils/maps_operations.h\"\n";
   os << "#include \"utils/maps_utils_v2.h\"\n\n";
+  os << "_Static_assert(MAPS_OP_ABI_VERSION == "
+     << kGeneratedOperationAbiVersion
+     << "u, \"incompatible MAGIA operation ABI\");\n";
   if (!spatzTasks.empty()) {
     os << "_Static_assert(MAPS_KERNEL_ABI_VERSION == "
        << kGeneratedKernelAbiVersion
@@ -1013,12 +1026,8 @@ void emitApplicationRunner(const MagiaApplicationDescription &application,
           "MAPS_OPERATION_TASK_SCRATCH_OFFSET);\n";
     os << "  runtime.spatz_params_bytes = MAPS_OPERATION_TASK_SCRATCH_BYTES;\n";
     os << "  runtime.spatz_initialized = 0u;\n";
-    for (const GeneratedSpatzTask &task : spatzTasks) {
-      if (task.kind == GeneratedOpKind::Add)
-        os << "  runtime.add_fp16_task = " << task.symbol << ";\n";
-      if (task.kind == GeneratedOpKind::Relu)
-        os << "  runtime.relu_fp16_task = " << task.symbol << ";\n";
-    }
+    for (const GeneratedSpatzTask &task : spatzTasks)
+      os << "  runtime." << task.runtimeField << " = " << task.symbol << ";\n";
   }
   os << "  fifo_tile_plan_t plan;\n";
   os << "  const uint32_t active = " << application.outputStem
@@ -1168,12 +1177,8 @@ void emitApplicationCMake(const MagiaApplicationDescription &application,
     os << "  TASK_NAME ${MAPS_APPLICATION}\n";
     os << ")\n";
     os << "target_compile_definitions(${MAPS_APPLICATION} PRIVATE\n";
-    for (const GeneratedSpatzTask &task : spatzTasks) {
-      if (task.kind == GeneratedOpKind::Add)
-        os << "  MAPS_HAS_ADD_SPATZ_TASK=1\n";
-      if (task.kind == GeneratedOpKind::Relu)
-        os << "  MAPS_HAS_RELU_SPATZ_TASK=1\n";
-    }
+    for (const GeneratedSpatzTask &task : spatzTasks)
+      os << "  " << task.featureMacro << "=1\n";
     os << ")\n";
   }
 }

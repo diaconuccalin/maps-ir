@@ -152,22 +152,57 @@ getRequiredSpatzTasks(const MagiaApplicationDescription &application) {
     return {};
   bool needsAdd = false;
   bool needsRelu = false;
+  bool needsSoftmaxExp = false;
+  bool needsGroupReduce = false;
+  bool needsGroupCenteredReduce = false;
+  bool needsGroupNormalize = false;
   for (const GeneratedOp &op : application.ops) {
     if (op.deviceName != "spatz")
       continue;
     needsAdd |= op.kind == GeneratedOpKind::Add;
     needsRelu |= op.kind == GeneratedOpKind::Relu;
+    needsSoftmaxExp |= op.kind == GeneratedOpKind::SoftmaxExp;
+    needsGroupReduce |= op.kind == GeneratedOpKind::GroupReduce;
+    needsGroupCenteredReduce |= op.kind == GeneratedOpKind::GroupCenteredReduce;
+    needsGroupNormalize |= op.kind == GeneratedOpKind::GroupNormalize;
   }
 
   SmallVector<GeneratedSpatzTask> tasks;
   if (needsAdd)
     tasks.push_back({GeneratedOpKind::Add, "add_fp16_spatz_task",
                      "add/spatz_task/add_fp16_spatz_task.c", "add/include",
-                     "ADD_FP16_SPATZ_TASK"});
+                     "ADD_FP16_SPATZ_TASK", "add_fp16_task",
+                     "MAPS_HAS_ADD_SPATZ_TASK"});
   if (needsRelu)
     tasks.push_back({GeneratedOpKind::Relu, "relu_fp16_spatz_task",
                      "relu/spatz_task/relu_fp16_spatz_task.c", "relu/include",
-                     "RELU_FP16_SPATZ_TASK"});
+                     "RELU_FP16_SPATZ_TASK", "relu_fp16_task",
+                     "MAPS_HAS_RELU_SPATZ_TASK"});
+  if (needsSoftmaxExp)
+    tasks.push_back({GeneratedOpKind::SoftmaxExp, "softmax_exp_fp16_spatz_task",
+                     "softmax_exp/spatz_task/softmax_exp_fp16_spatz_task.c",
+                     "softmax_exp/include", "SOFTMAX_EXP_FP16_SPATZ_TASK",
+                     "softmax_exp_fp16_task", "MAPS_HAS_SOFTMAX_EXP_SPATZ_TASK"});
+  if (needsGroupReduce)
+    tasks.push_back({GeneratedOpKind::GroupReduce, "group_reduce_fp16_spatz_task",
+                     "group_reduce/spatz_task/group_reduce_fp16_spatz_task.c",
+                     "group_reduce/include", "GROUP_REDUCE_FP16_SPATZ_TASK",
+                     "group_reduce_fp16_task", "MAPS_HAS_GROUP_REDUCE_SPATZ_TASK"});
+  if (needsGroupCenteredReduce)
+    tasks.push_back({GeneratedOpKind::GroupCenteredReduce,
+                     "group_centered_reduce_fp16_spatz_task",
+                     "group_centered_reduce/spatz_task/group_centered_reduce_fp16_spatz_task.c",
+                     "group_centered_reduce/include",
+                     "GROUP_CENTERED_REDUCE_FP16_SPATZ_TASK",
+                     "group_centered_reduce_fp16_task",
+                     "MAPS_HAS_GROUP_CENTERED_REDUCE_SPATZ_TASK"});
+  if (needsGroupNormalize)
+    tasks.push_back({GeneratedOpKind::GroupNormalize,
+                     "group_normalize_fp16_spatz_task",
+                     "group_normalize/spatz_task/group_normalize_fp16_spatz_task.c",
+                     "group_normalize/include", "GROUP_NORMALIZE_FP16_SPATZ_TASK",
+                     "group_normalize_fp16_task",
+                     "MAPS_HAS_GROUP_NORMALIZE_SPATZ_TASK"});
   return tasks;
 }
 
@@ -177,7 +212,11 @@ LogicalResult validateSpatzTaskCoverage(
     return success();
   for (const GeneratedOp &op : application.ops) {
     if (op.deviceName == "spatz" && op.kind != GeneratedOpKind::Add &&
-        op.kind != GeneratedOpKind::Relu) {
+        op.kind != GeneratedOpKind::Relu &&
+        op.kind != GeneratedOpKind::SoftmaxExp &&
+        op.kind != GeneratedOpKind::GroupReduce &&
+        op.kind != GeneratedOpKind::GroupCenteredReduce &&
+        op.kind != GeneratedOpKind::GroupNormalize) {
       llvm::errs() << "MAGIA-v3 has no Tile-Local Spatz Task for "
                    << static_cast<unsigned>(op.kind) << "\n";
       return failure();

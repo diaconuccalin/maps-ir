@@ -40,10 +40,20 @@ static std::optional<GeneratedOpKind> getKernelOpKind(StringRef kind) {
     return GeneratedOpKind::Div;
   if (kind == "EXP")
     return GeneratedOpKind::Exp;
+  if (kind == "SOFTMAX_EXP")
+    return GeneratedOpKind::SoftmaxExp;
   if (kind == "GROUP_NORMALIZE")
     return GeneratedOpKind::GroupNormalize;
   if (kind == "GROUP_REDUCE")
     return GeneratedOpKind::GroupReduce;
+  if (kind == "GROUP_CENTERED_REDUCE")
+    return GeneratedOpKind::GroupCenteredReduce;
+  if (kind == "IM2COL")
+    return GeneratedOpKind::Im2Col;
+  if (kind == "OUTPUT_REFORMAT")
+    return GeneratedOpKind::OutputReformat;
+  if (kind == "SPLIT")
+    return GeneratedOpKind::Split;
   if (kind == "LOG")
     return GeneratedOpKind::Log;
   if (kind == "MUL")
@@ -207,19 +217,24 @@ LogicalResult collectComputeOp(Operation *op, RunCollectionState &state,
     generatedOp.inputSubsliceIndices.push_back(input->second);
   }
 
-  std::string valueKey = getProducedValueKey(state, op->getResult(0));
-  std::string uniqueKey =
-      (Twine("op:") + Twine(tileId.getInt()) + ":" + valueKey).str();
-  unsigned outputSliceIndex = getOrCreateProducedSlice(
-      application, state.producedSliceIndices, uniqueKey, valueKey,
-      GeneratedGlobalKind::Intermediate, tileId.getInt(), outputType, {});
-  if (outputSliceIndex == std::numeric_limits<unsigned>::max())
-    return failure();
+  for (unsigned resultIndex = 0; resultIndex < numOutputs; ++resultIndex) {
+    auto resultType = dyn_cast<RankedTensorType>(op->getResult(resultIndex).getType());
+    if (!resultType)
+      return failure();
+    std::string valueKey = getProducedValueKey(state, op->getResult(resultIndex));
+    std::string uniqueKey =
+        (Twine("op:") + Twine(tileId.getInt()) + ":" + valueKey).str();
+    unsigned outputSliceIndex = getOrCreateProducedSlice(
+        application, state.producedSliceIndices, uniqueKey, valueKey,
+        GeneratedGlobalKind::Intermediate, tileId.getInt(), resultType, {});
+    if (outputSliceIndex == std::numeric_limits<unsigned>::max())
+      return failure();
 
-  unsigned outputSubsliceIndex =
-      addWholeSubsliceForSlice(application, outputSliceIndex);
-  generatedOp.outputSubsliceIndices.push_back(outputSubsliceIndex);
-  state.valueSubsliceIndices[op->getResult(0)] = outputSubsliceIndex;
+    unsigned outputSubsliceIndex =
+        addWholeSubsliceForSlice(application, outputSliceIndex);
+    generatedOp.outputSubsliceIndices.push_back(outputSubsliceIndex);
+    state.valueSubsliceIndices[op->getResult(resultIndex)] = outputSubsliceIndex;
+  }
 
   unsigned opIndex = addGeneratedOp(application, generatedOp);
   noteTile(application, tileId.getInt());

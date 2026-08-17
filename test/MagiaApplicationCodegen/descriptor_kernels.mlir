@@ -44,8 +44,8 @@ module attributes {
           %1 = "maps.kernel"(%0) <{kind = "DEPTHWISE_CONV", params = array<i64: 1, 1, 1, 1, 0, 0, 0, 0>}> : (tensor<1x2x3x4x5x6xf16>) -> tensor<1x2x3x4x5x6xf16>
           %2 = "maps.kernel"(%1) <{kind = "ABS", params = array<i64>}> : (tensor<1x2x3x4x5x6xf16>) -> tensor<1x2x3x4x5x6xf16>
           %3 = "maps.kernel"(%2, %2) <{kind = "DIV", params = array<i64>}> : (tensor<1x2x3x4x5x6xf16>, tensor<1x2x3x4x5x6xf16>) -> tensor<1x2x3x4x5x6xf16>
-          %4 = "maps.kernel"(%3) <{kind = "GROUP_NORMALIZE", params = array<i64: 2, 925353388>}> : (tensor<1x2x3x4x5x6xf16>) -> tensor<1x2x3x4x5x6xf16>
-          %5 = "maps.kernel"(%4) <{kind = "GROUP_REDUCE", params = array<i64: 2>}> : (tensor<1x2x3x4x5x6xf16>) -> tensor<1x2x3x4x5x6xf16>
+          %4 = "maps.kernel"(%3) <{kind = "GROUP_NORMALIZE", params = array<i64: 2, 925353388, 360, 1>}> : (tensor<1x2x3x4x5x6xf16>) -> tensor<1x2x3x4x5x6xf16>
+          %5 = "maps.kernel"(%4) <{kind = "GROUP_REDUCE", params = array<i64: 2, 360, 1>}> : (tensor<1x2x3x4x5x6xf16>) -> tensor<1x2x3x4x5x6xf16>
           %6 = "maps.kernel"(%5, %5) <{kind = "MUL", params = array<i64>}> : (tensor<1x2x3x4x5x6xf16>, tensor<1x2x3x4x5x6xf16>) -> tensor<1x2x3x4x5x6xf16>
           %7 = "maps.kernel"(%6) <{kind = "NEG", params = array<i64>}> : (tensor<1x2x3x4x5x6xf16>) -> tensor<1x2x3x4x5x6xf16>
           %8 = "maps.kernel"(%7, %7) <{kind = "POW", params = array<i64>}> : (tensor<1x2x3x4x5x6xf16>, tensor<1x2x3x4x5x6xf16>) -> tensor<1x2x3x4x5x6xf16>

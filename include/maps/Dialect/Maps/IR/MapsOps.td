@@ -232,7 +232,7 @@ def KernelOp : Maps_Op<"kernel"> {
   );
 
   let results = (outs
-    AnyRankedTensor:$output
+    Variadic<AnyRankedTensor>:$outputs
   );
 }
 
