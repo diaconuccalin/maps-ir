@@ -785,7 +785,9 @@ getDescriptorKernelKind(const llvm::json::Object &payload) {
         kind = "IM2COL";
     else if (kind == "OutputReformat")
         kind = "OUTPUT_REFORMAT";
-    if (kind.empty() && payload.getBoolean("transpose_w").value_or(false))
+    else if (kind == "GEMM")
+        kind = "MATMUL";
+    if (kind.empty() && payload.getBoolean("transpose_w").has_value())
         kind = "MATMUL";
 
     if (kind == "AllReduceSum" || kind == "AllReduceMax")
@@ -2077,7 +2079,7 @@ importExecutionPlanDocument(StringRef input, MLIRContext *ctx) {
                     bool transposeW =
                         payload &&
                         payload->getBoolean("transpose_w").value_or(false);
-                    if (transposeW) {
+                    if (transposeW || inputs->size() == 3) {
                         auto *output = (*outputs)[0].getAsObject();
                         auto kernel = output
                             ? emitDescriptorKernel(
@@ -2087,7 +2089,7 @@ importExecutionPlanDocument(StringRef input, MLIRContext *ctx) {
                             : FailureOr<Value>(failure());
                         if (failed(kernel)) {
                             llvm::errs()
-                                << "unsupported transposed Matmul descriptor\n";
+                                << "unsupported Matmul descriptor\n";
                             return {};
                         }
                         tileValues[*outputTensorId] = *kernel;

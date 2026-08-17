@@ -470,7 +470,7 @@ static void emitOpDesc(const MagiaApplicationDescription &application,
   os << "    .kind = " << getOpKindName(op.kind) << ",\n";
   os << "    .num_inputs = " << op.inputSubsliceIndices.size() << "u,\n";
   os << "    .inputs = ";
-  emitSubsliceArray(application, op.inputSubsliceIndices, 4, os);
+  emitSubsliceArray(application, op.inputSubsliceIndices, 5, os);
   os << ",\n";
   os << "    .num_outputs = " << op.outputSubsliceIndices.size() << "u,\n";
   os << "    .outputs = ";

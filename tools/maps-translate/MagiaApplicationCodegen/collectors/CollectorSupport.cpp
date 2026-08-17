@@ -78,6 +78,10 @@ std::string getChannelBaseName(StringRef channel) {
   if (fromTile != StringRef::npos)
     return channel.take_front(fromTile).str();
 
+  size_t transfer = channel.find("_transfer_");
+  if (transfer != StringRef::npos)
+    return channel.take_front(transfer).str();
+
   return channel.str();
 }
 
