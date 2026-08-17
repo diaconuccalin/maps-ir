@@ -474,7 +474,7 @@ static void emitOpDesc(const MagiaApplicationDescription &application,
   os << ",\n";
   os << "    .num_outputs = " << op.outputSubsliceIndices.size() << "u,\n";
   os << "    .outputs = ";
-  emitSubsliceArray(application, op.outputSubsliceIndices, 2, os);
+  emitSubsliceArray(application, op.outputSubsliceIndices, 3, os);
   os << ",\n";
   if (op.isCollective) {
     os << "    .collective = {.stage_id = " << op.collectiveIdentity.stageId
