@@ -814,20 +814,67 @@ static int64_t getF32ParameterBits(double value) {
     return static_cast<int64_t>(parameter.bitcastToAPInt().getZExtValue());
 }
 
+static int64_t packU16Pair(int64_t first, int64_t second) {
+    if (first < 0 || first > UINT16_MAX || second < 0 || second > UINT16_MAX)
+        return -1;
+    return first | (second << 16);
+}
+
 static std::optional<SmallVector<int64_t>>
 getDescriptorKernelParams(StringRef kind, const llvm::json::Object &payload) {
     SmallVector<int64_t> params;
 
-    if (kind == "DEPTHWISE_CONV") {
+    if (kind == "IM2COL") {
+        auto kernelShape = parseIntArrayField(payload, "kernel_shape");
         auto strides = parseIntArrayField(payload, "strides");
         auto dilations = parseIntArrayField(payload, "dilations");
         auto pads = parseIntArrayField(payload, "pads");
+        auto *input = payload.getObject("x");
+        auto inputDims = input ? parseIntArrayField(*input, "dims") : std::nullopt;
+        if (!kernelShape || kernelShape->size() != 2 || !strides ||
+            strides->size() != 2 || !dilations || dilations->size() != 2 ||
+            !pads || pads->size() != 4 || !inputDims || inputDims->size() != 4)
+            return std::nullopt;
+        int64_t outputHeight =
+            ((*inputDims)[2] + (*pads)[0] + (*pads)[2] -
+             (*dilations)[0] * ((*kernelShape)[0] - 1) - 1) /
+                (*strides)[0] +
+            1;
+        int64_t outputWidth =
+            ((*inputDims)[3] + (*pads)[1] + (*pads)[3] -
+             (*dilations)[1] * ((*kernelShape)[1] - 1) - 1) /
+                (*strides)[1] +
+            1;
+        params.append({packU16Pair((*kernelShape)[0], (*kernelShape)[1]),
+                       packU16Pair((*strides)[0], (*strides)[1]),
+                       packU16Pair((*dilations)[0], (*dilations)[1]),
+                       packU16Pair((*pads)[0], (*pads)[1]),
+                       packU16Pair((*pads)[2], (*pads)[3]),
+                       packU16Pair((*inputDims)[2], (*inputDims)[3]),
+                       packU16Pair(outputHeight, outputWidth)});
+        if (llvm::is_contained(params, -1))
+            return std::nullopt;
+    } else if (kind == "DEPTHWISE_CONV") {
+        auto strides = parseIntArrayField(payload, "strides");
+        auto dilations = parseIntArrayField(payload, "dilations");
+        auto pads = parseIntArrayField(payload, "pads");
+        auto *input = payload.getObject("x");
+        auto *weight = payload.getObject("w");
+        auto inputDims = input ? parseIntArrayField(*input, "dims") : std::nullopt;
+        auto weightDims = weight ? parseIntArrayField(*weight, "dims") : std::nullopt;
         if (!strides || strides->size() != 2 || !dilations ||
-            dilations->size() != 2 || !pads || pads->size() != 4)
+            dilations->size() != 2 || !pads || pads->size() != 4 ||
+            !inputDims || inputDims->size() != 4 || !weightDims ||
+            weightDims->size() != 4 || (*inputDims)[1] <= 0 ||
+            (*weightDims)[0] % (*inputDims)[1] != 0)
             return std::nullopt;
         params.append(*strides);
         params.append(*dilations);
         params.append(*pads);
+        // The lower padding is not needed by the tile-local loop. Preserve the
+        // right padding in slot 7 and use slot 6 for the channel multiplier so
+        // unaligned output-channel shards can rebase their input channels.
+        params[6] = (*weightDims)[0] / (*inputDims)[1];
     } else if (kind == "REDUCE_MAX" || kind == "REDUCE_SUM") {
         auto axis = payload.getInteger("axis");
         if (!axis)
@@ -914,7 +961,8 @@ static FailureOr<Value> emitDescriptorKernel(
         inputType ? parseTileOutputType(*nodeOutput, output, tile, stage,
                                         inputType.getElementType())
                   : std::nullopt;
-    if (!outputType)
+    auto outputSlice = parseTileOutputSlice(*nodeOutput, output, tile, stage);
+    if (!outputType || !outputSlice)
         return failure();
 
     if (*kind == "MATMUL") {
@@ -932,6 +980,11 @@ static FailureOr<Value> emitDescriptorKernel(
     state.addTypes(*outputType);
     state.addAttribute("kind", builder.getStringAttr(*kind));
     state.addAttribute("params", builder.getDenseI64ArrayAttr(*params));
+    SmallVector<int64_t> outputFullOffset;
+    for (const SliceDim &dim : *outputSlice)
+        outputFullOffset.push_back(dim.start);
+    state.addAttribute("output_full_offset_0",
+                       builder.getDenseI64ArrayAttr(outputFullOffset));
     if (auto deviceName = layer.getString("device_name"))
         state.addAttribute("device_name", builder.getStringAttr(*deviceName));
     if (*kind == "AllReduceSum" || *kind == "AllReduceMax") {
@@ -1006,6 +1059,7 @@ static FailureOr<SmallVector<Value>> emitSplitDescriptorKernel(
         return failure();
 
     SmallVector<Type> outputTypes;
+    SmallVector<SmallVector<int64_t>> outputFullOffsets;
     for (unsigned index = 0; index < outputs.size(); ++index) {
         auto *nodeOutput = (*nodeOutputs)[index].getAsObject();
         auto *output = outputs[index].getAsObject();
@@ -1013,9 +1067,16 @@ static FailureOr<SmallVector<Value>> emitSplitDescriptorKernel(
             ? parseTileOutputType(*nodeOutput, *output, tile, stage,
                                   inputType.getElementType())
             : std::nullopt;
-        if (!outputType)
+        auto outputSlice = nodeOutput && output
+            ? parseTileOutputSlice(*nodeOutput, *output, tile, stage)
+            : std::nullopt;
+        if (!outputType || !outputSlice)
             return failure();
         outputTypes.push_back(*outputType);
+        SmallVector<int64_t> fullOffset;
+        for (const SliceDim &dim : *outputSlice)
+            fullOffset.push_back(dim.start);
+        outputFullOffsets.push_back(std::move(fullOffset));
     }
 
     OperationState state(loc, maps::KernelOp::getOperationName());
@@ -1023,6 +1084,10 @@ static FailureOr<SmallVector<Value>> emitSplitDescriptorKernel(
     state.addTypes(outputTypes);
     state.addAttribute("kind", builder.getStringAttr("SPLIT"));
     state.addAttribute("params", builder.getDenseI64ArrayAttr(*params));
+    for (auto indexed : llvm::enumerate(outputFullOffsets))
+        state.addAttribute(
+            (Twine("output_full_offset_") + Twine(indexed.index())).str(),
+            builder.getDenseI64ArrayAttr(indexed.value()));
     if (auto deviceName = layer.getString("device_name"))
         state.addAttribute("device_name", builder.getStringAttr(*deviceName));
     Operation *kernel = builder.create(state);

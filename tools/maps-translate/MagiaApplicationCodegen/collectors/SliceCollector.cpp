@@ -42,8 +42,12 @@ unsigned getOrCreateProducedSlice(
 
   // Reuse the produced slice if it was already created for this key
   auto existingSlice = producedSliceIndices.find(uniqueKey);
-  if (existingSlice != producedSliceIndices.end())
+  if (existingSlice != producedSliceIndices.end()) {
+    if (!fullOffset.empty())
+      application.slices[existingSlice->second].fullOffset.assign(
+          fullOffset.begin(), fullOffset.end());
     return existingSlice->second;
+  }
 
   // Initialize the descriptor for the produced tile-local slice
   GeneratedSlice slice;

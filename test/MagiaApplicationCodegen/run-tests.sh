@@ -70,7 +70,7 @@ grep -q 'void my_model_v1_handle_input(uint32_t token);' \
 ! grep -q 'slice_desc_t\|fifo_tile_plan_t' \
   "${application}/include/my_model_v1.h"
 grep -q '.kind = OP_SIGMOID' "${application}/src/tiles/tile_00.c"
-grep -q 'my_model_v1_build_tile_00_plan' \
+grep -q 'const fifo_tile_plan_t my_model_v1_tile_00_plan' \
   "${application}/src/tiles/tile_00.c"
 grep -q 'my_model_v1_handle_input(token)' \
   "${application}/src/my_model_v1_runner.c"
@@ -134,10 +134,28 @@ transition_application="${test_dir}/transitions"
   -o "${transition_application}"
 grep -q 'static const fifo_send_desc_t' \
   "${transition_application}/src/tiles/tile_00.c"
+grep -q '.full_offset = {3, 5, 0, 0, 0, 0}' \
+  "${transition_application}/src/tiles/tile_00.c"
 grep -q '.dst_hartid = 1' \
   "${transition_application}/src/tiles/tile_00.c"
 grep -q 'static const fifo_recv_desc_t' \
   "${transition_application}/src/tiles/tile_01.c"
+grep -q '.slot_data_size = 8u' \
+  "${transition_application}/src/tiles/tile_01.c"
+! grep -q 'slot_data_sizes\|FIFO_SLOT_OFFSET_SIZE' \
+  "${transition_application}/src/tiles/tile_01.c"
+variable_fifo_application="${test_dir}/variable-fifo"
+"${code_generator}" "${fixture_root}/two_tile_transitions.mlir" \
+  --target=magia-v3 \
+  --maps-magia-output-stem=variable_fifo \
+  --maps-magia-weights-file="${source_initializers}" \
+  -o "${variable_fifo_application}"
+grep -q 'static const uint32_t variable_fifo_tile_1_fifo_slot_data_sizes\[\] = {8u};' \
+  "${variable_fifo_application}/src/tiles/tile_01.c"
+grep -q '.slot_data_sizes = variable_fifo_tile_1_fifo_slot_data_sizes' \
+  "${variable_fifo_application}/src/tiles/tile_01.c"
+grep -q 'FIFO_SLOT_OFFSET_SIZE' \
+  "${variable_fifo_application}/src/tiles/tile_01.c"
 
 collective_plan="${test_dir}/collective.plan.json"
 PYTHONPATH="${repo_root}/.." "${repo_root}/../.venv/bin/python" -c \

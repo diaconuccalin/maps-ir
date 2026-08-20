@@ -224,9 +224,14 @@ LogicalResult collectComputeOp(Operation *op, RunCollectionState &state,
     std::string valueKey = getProducedValueKey(state, op->getResult(resultIndex));
     std::string uniqueKey =
         (Twine("op:") + Twine(tileId.getInt()) + ":" + valueKey).str();
+    std::string outputFullOffsetName =
+        (Twine("output_full_offset_") + Twine(resultIndex)).str();
+    SmallVector<int64_t> outputFullOffset =
+        getDenseI64Array(op, outputFullOffsetName);
     unsigned outputSliceIndex = getOrCreateProducedSlice(
         application, state.producedSliceIndices, uniqueKey, valueKey,
-        GeneratedGlobalKind::Intermediate, tileId.getInt(), resultType, {});
+        GeneratedGlobalKind::Intermediate, tileId.getInt(), resultType,
+        outputFullOffset);
     if (outputSliceIndex == std::numeric_limits<unsigned>::max())
       return failure();
 

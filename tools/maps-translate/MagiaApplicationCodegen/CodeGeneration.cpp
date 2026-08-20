@@ -352,12 +352,23 @@ LogicalResult generateMagiaApplication(ModuleOp module,
   MagiaApplicationDescription application;
   configureGeneratedRuntime(application, target);
   application.outputStem = normalizeSnakeCase(application.outputStem);
-  if (application.l2End <= application.l2Base ||
-      failed(collectMagiaApplicationDescription(module, application)) ||
-      application.sourceModelName.empty() || application.meshWidth == 0 ||
-      application.meshHeight == 0 || !application.hasPackedWeights || application.numTokens == 0 ||
-      failed(validateSpatzTaskCoverage(application)) ||
-      failed(configureRuntimeInputs(application)))
+  if (application.l2End <= application.l2Base) {
+    llvm::errs() << "invalid generated application L2 range\n";
+    return failure();
+  }
+  if (failed(collectMagiaApplicationDescription(module, application))) {
+    llvm::errs() << "failed to collect generated application descriptors\n";
+    return failure();
+  }
+  if (application.sourceModelName.empty() || application.meshWidth == 0 ||
+      application.meshHeight == 0 || !application.hasPackedWeights ||
+      application.numTokens == 0) {
+    llvm::errs() << "incomplete generated application metadata\n";
+    return failure();
+  }
+  if (failed(validateSpatzTaskCoverage(application)))
+    return failure();
+  if (failed(configureRuntimeInputs(application)))
     return failure();
 
   StringRef sourceInitializers = magiaWeightsFile.empty()

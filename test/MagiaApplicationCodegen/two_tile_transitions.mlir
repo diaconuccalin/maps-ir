@@ -36,7 +36,8 @@ module attributes {
           %produced = "maps.kernel"(%input) <{
             kind = "SIGMOID",
             params = array<i64>
-          }> : (tensor<2x2xf16>) -> tensor<2x2xf16>
+          }> {output_full_offset_0 = array<i64: 3, 5>}
+            : (tensor<2x2xf16>) -> tensor<2x2xf16>
           %produced_slice = tensor.extract_slice %produced[0, 0] [2, 2] [1, 1]
             : tensor<2x2xf16> to tensor<2x2xf16>
           maps.send %produced_slice, @transition_1_transfer_0 {

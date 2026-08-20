@@ -451,16 +451,28 @@ static uint64_t getSubsliceL1Offset(const MagiaApplicationDescription &applicati
 }
 
 static uint64_t getFifoSlotDataSize(const MagiaApplicationDescription &application,
-                                    const GeneratedTilePlan &plan);
+                                    unsigned recvIndex);
 
 static void emitL1DataBaseOffset(const MagiaApplicationDescription &application,
                                  int64_t hartid, llvm::raw_ostream &os) {
   const GeneratedTilePlan &plan = application.tilePlans.find(hartid)->second;
-  const uint64_t slotDataSize = getFifoSlotDataSize(application, plan);
+  if (application.target != "magia-v3") {
+    uint64_t slotDataSize = 0;
+    for (unsigned recvIndex : plan.recvIndices)
+      slotDataSize = std::max(
+          slotDataSize, getFifoSlotDataSize(application, recvIndex));
+    os << "FIFO_HEADER_SIZE + " << plan.recvIndices.size()
+       << "u * FIFO_RING_STATE_SIZE + " << plan.recvIndices.size()
+       << "u * MAPS_NUM_TOKEN_SLOTS * (FIFO_SLOT_META_SIZE + (("
+       << slotDataSize << "u + 3u) & ~3u))";
+    return;
+  }
   os << "FIFO_HEADER_SIZE + " << plan.recvIndices.size()
-     << "u * FIFO_RING_STATE_SIZE + " << plan.recvIndices.size()
-     << "u * MAPS_NUM_TOKEN_SLOTS * (FIFO_SLOT_META_SIZE + (("
-     << slotDataSize << "u + 3u) & ~3u))";
+     << "u * FIFO_RING_STATE_SIZE + " << plan.recvIndices.size() + 1
+     << "u * FIFO_SLOT_OFFSET_SIZE";
+  for (unsigned recvIndex : plan.recvIndices)
+    os << " + MAPS_NUM_TOKEN_SLOTS * (FIFO_SLOT_META_SIZE + (("
+       << getFifoSlotDataSize(application, recvIndex) << "u + 3u) & ~3u))";
 }
 
 static void emitOpDesc(const MagiaApplicationDescription &application,
@@ -644,36 +656,37 @@ static void emitTileL2WriteDescriptors(const MagiaApplicationDescription &applic
 }
 
 static uint64_t getFifoSlotDataSize(const MagiaApplicationDescription &application,
-                                    const GeneratedTilePlan &plan) {
-  uint64_t maxBytes = 0;
-  for (unsigned recvIndex : plan.recvIndices) {
-    const GeneratedRecv &recv = application.recvs[recvIndex];
-    const GeneratedSubslice &dst = application.subslices[recv.dstSubsliceIndex];
-    maxBytes = std::max(maxBytes, product(dst.shape) * dst.elemBytes);
+                                    unsigned recvIndex) {
+  const GeneratedRecv &recv = application.recvs[recvIndex];
+  const GeneratedSubslice &dst = application.subslices[recv.dstSubsliceIndex];
+  return product(dst.shape) * dst.elemBytes;
+}
+
+static void emitFifoSlotDataSizes(const MagiaApplicationDescription &application,
+                                  const GeneratedTilePlan &plan,
+                                  llvm::raw_ostream &os) {
+  if (application.target != "magia-v3" || plan.recvIndices.empty())
+    return;
+
+  os << "static const uint32_t maps_application_tile_" << plan.hartid
+     << "_fifo_slot_data_sizes[] = {";
+  for (unsigned i = 0; i < plan.recvIndices.size(); ++i) {
+    if (i != 0)
+      os << ", ";
+    os << getFifoSlotDataSize(application, plan.recvIndices[i]) << "u";
   }
-  return maxBytes;
+  os << "};\n\n";
 }
 
-static void emitFifoStorageHelper(llvm::raw_ostream &os) {
-  os << "static inline uint32_t maps_application_fifo_bytes(\n";
-  os << "    uint32_t num_producers, uint32_t num_slots,\n";
-  os << "    uint32_t slot_data_size) {\n";
-  os << "  uint32_t slot_stride = FIFO_SLOT_META_SIZE + "
-        "((slot_data_size + 3u) & ~3u);\n";
-  os << "  return FIFO_HEADER_SIZE + num_producers * FIFO_RING_STATE_SIZE +\n";
-  os << "         num_producers * num_slots * slot_stride;\n";
-  os << "}\n\n";
-}
-
-static void emitPlanArrayAssignment(StringRef fieldName, StringRef arraySuffix,
-                                    unsigned count, int64_t hartid,
-                                    llvm::raw_ostream &os) {
+static void emitPlanArrayInitializer(StringRef fieldName, StringRef arraySuffix,
+                                     unsigned count, int64_t hartid,
+                                     llvm::raw_ostream &os) {
   if (count == 0)
     return;
 
-  os << "    plan->num_" << fieldName << " = " << count << "u;\n";
-  os << "    plan->" << fieldName << " = maps_application_tile_"
-     << hartid << "_" << arraySuffix << ";\n";
+  os << "  .num_" << fieldName << " = " << count << "u,\n";
+  os << "  ." << fieldName << " = maps_application_tile_"
+     << hartid << "_" << arraySuffix << ",\n";
 }
 
 static void emitApplicationDataDefinitions(
@@ -853,11 +866,19 @@ void emitApplicationDataSource(const MagiaApplicationDescription &application,
       application, [&](llvm::raw_ostream &stream) { emitApplicationDataDefinitions(application, stream); });
   os << "\n";
   for (const GeneratedTilePlan *plan : getSortedTilePlans(application)) {
-    os << "extern uint32_t " << application.outputStem << "_build_tile_"
-       << getPaddedPhysicalTileId(application, plan->hartid) << "_plan(\n";
-    os << "    fifo_tile_plan_t *plan,\n";
-    os << "    maps_operation_runtime_t *runtime);\n";
+    os << "extern const fifo_tile_plan_t " << application.outputStem
+       << "_tile_" << getPaddedPhysicalTileId(application, plan->hartid)
+       << "_plan;\n";
   }
+  uint64_t physicalTileCount =
+      static_cast<uint64_t>(application.meshWidth) * application.meshHeight;
+  os << "static const fifo_tile_plan_t *const " << application.outputStem
+     << "_tile_plans[" << physicalTileCount << "] = {\n";
+  for (const GeneratedTilePlan *plan : getSortedTilePlans(application))
+    os << "  [" << plan->hartid << "] = &" << application.outputStem
+       << "_tile_" << getPaddedPhysicalTileId(application, plan->hartid)
+       << "_plan,\n";
+  os << "};\n";
   os << "\nvoid " << application.outputStem
      << "_initialize_data(uint32_t hartid) {\n";
   os << "  " << application.outputStem << "_init_tensors(hartid);\n";
@@ -865,16 +886,13 @@ void emitApplicationDataSource(const MagiaApplicationDescription &application,
   os << "uint32_t " << application.outputStem << "_build_plan(\n";
   os << "    fifo_tile_plan_t *plan, uint32_t hartid,\n";
   os << "    maps_operation_runtime_t *runtime) {\n";
-  os << "  switch (hartid) {\n";
-  for (const GeneratedTilePlan *plan : getSortedTilePlans(application)) {
-    std::string tileId = getPaddedPhysicalTileId(application, plan->hartid);
-    os << "  case " << plan->hartid << "u:\n";
-    os << "    return " << application.outputStem << "_build_tile_" << tileId
-       << "_plan(plan, runtime);\n";
-  }
-  os << "  default:\n";
+  os << "  if (hartid >= " << physicalTileCount << "u || !"
+     << application.outputStem << "_tile_plans[hartid])\n";
   os << "    return 0u;\n";
-  os << "  }\n";
+  os << "  *plan = *" << application.outputStem << "_tile_plans[hartid];\n";
+  os << "  plan->l1_data_base += get_l1_base(hartid);\n";
+  os << "  plan->operation_runtime = runtime;\n";
+  os << "  return 1u;\n";
   os << "}\n\n";
   for (const GeneratedL2Global &global : application.l2Globals) {
     if (global.globalKind != GeneratedGlobalKind::Input &&
@@ -895,7 +913,6 @@ void emitApplicationDataSource(const MagiaApplicationDescription &application,
 static void emitApplicationTilePlanConstructor(
     const MagiaApplicationDescription &application, const GeneratedTilePlan &plan,
     llvm::raw_ostream &os) {
-  uint64_t fifoSlotDataSize = getFifoSlotDataSize(application, plan);
   if (application.target == "magia-v3") {
     os << "_Static_assert(";
     emitL1DataBaseOffset(application, plan.hartid, os);
@@ -903,43 +920,45 @@ static void emitApplicationTilePlanConstructor(
        << "u <= MAPS_V3_TASK_SCRATCH_OFFSET, "
           "\"FIFO and planned L1 data overlap task scratch\");\n\n";
   }
-  os << "uint32_t maps_application_build_tile_"
-     << getPaddedPhysicalTileId(application, plan.hartid) << "_plan(\n";
-  os << "    fifo_tile_plan_t *plan,\n";
-  os << "    maps_operation_runtime_t *runtime) {\n";
-  os << "  *plan = (fifo_tile_plan_t){\n";
-  os << "    .hartid = " << plan.hartid << "u,\n";
-  os << "    .l1_data_base = get_l1_base(" << plan.hartid << "u),\n";
-  os << "    .ready_flags_base = MAPS_APPLICATION_READY_FLAGS_OFFSET,\n";
-  os << "    .ready_flags_count = MAPS_APPLICATION_READY_FLAGS_WORDS,\n";
-  os << "    .num_token_slots = MAPS_APPLICATION_NUM_TOKEN_SLOTS,\n";
-  os << "    .operation_runtime = runtime,\n";
-  os << "    .fifo = {\n";
-  os << "      .l1_offset_bytes = 0u,\n";
-  os << "      .num_producers = " << plan.recvIndices.size() << "u,\n";
-  os << "      .num_slots = MAPS_APPLICATION_NUM_TOKEN_SLOTS,\n";
-  os << "      .slot_data_size = " << fifoSlotDataSize << "u,\n";
-  os << "    },\n";
-  os << "  };\n";
-  os << "  plan->l1_data_base += maps_application_fifo_bytes(\n";
-  os << "      plan->fifo.num_producers, plan->fifo.num_slots,\n";
-  os << "      plan->fifo.slot_data_size);\n";
-  emitPlanArrayAssignment("slices", "slices", plan.sliceIndices.size(),
-                          plan.hartid, os);
-  emitPlanArrayAssignment("init_l2_reads", "init_l2_reads",
-                          plan.initL2ReadIndices.size(), plan.hartid, os);
-  emitPlanArrayAssignment("l2_reads", "l2_reads",
-                          plan.l2ReadIndices.size(), plan.hartid, os);
-  emitPlanArrayAssignment("recvs", "recvs", plan.recvIndices.size(),
-                          plan.hartid, os);
-  emitPlanArrayAssignment("ops", "ops", plan.opIndices.size(), plan.hartid,
-                          os);
-  emitPlanArrayAssignment("sends", "sends", plan.sendIndices.size(),
-                          plan.hartid, os);
-  emitPlanArrayAssignment("l2_writes", "l2_writes",
-                          plan.l2WriteIndices.size(), plan.hartid, os);
-  os << "  return 1u;\n";
-  os << "}\n";
+  os << "const fifo_tile_plan_t maps_application_tile_"
+     << getPaddedPhysicalTileId(application, plan.hartid) << "_plan = {\n";
+  os << "  .hartid = " << plan.hartid << "u,\n";
+  os << "  .l1_data_base = ";
+  emitL1DataBaseOffset(application, plan.hartid, os);
+  os << ",\n";
+  os << "  .ready_flags_base = MAPS_APPLICATION_READY_FLAGS_OFFSET,\n";
+  os << "  .ready_flags_count = MAPS_APPLICATION_READY_FLAGS_WORDS,\n";
+  os << "  .num_token_slots = MAPS_APPLICATION_NUM_TOKEN_SLOTS,\n";
+  os << "  .fifo = {\n";
+  os << "    .l1_offset_bytes = 0u,\n";
+  os << "    .num_producers = " << plan.recvIndices.size() << "u,\n";
+  os << "    .num_slots = MAPS_APPLICATION_NUM_TOKEN_SLOTS,\n";
+  if (application.target == "magia-v3" && !plan.recvIndices.empty())
+    os << "    .slot_data_sizes = maps_application_tile_" << plan.hartid
+       << "_fifo_slot_data_sizes,\n";
+  if (application.target != "magia-v3") {
+    uint64_t slotDataSize = 0;
+    for (unsigned recvIndex : plan.recvIndices)
+      slotDataSize = std::max(
+          slotDataSize, getFifoSlotDataSize(application, recvIndex));
+    os << "    .slot_data_size = " << slotDataSize << "u,\n";
+  }
+  os << "  },\n";
+  emitPlanArrayInitializer("slices", "slices", plan.sliceIndices.size(),
+                           plan.hartid, os);
+  emitPlanArrayInitializer("init_l2_reads", "init_l2_reads",
+                           plan.initL2ReadIndices.size(), plan.hartid, os);
+  emitPlanArrayInitializer("l2_reads", "l2_reads",
+                           plan.l2ReadIndices.size(), plan.hartid, os);
+  emitPlanArrayInitializer("recvs", "recvs", plan.recvIndices.size(),
+                           plan.hartid, os);
+  emitPlanArrayInitializer("ops", "ops", plan.opIndices.size(), plan.hartid,
+                           os);
+  emitPlanArrayInitializer("sends", "sends", plan.sendIndices.size(),
+                           plan.hartid, os);
+  emitPlanArrayInitializer("l2_writes", "l2_writes",
+                           plan.l2WriteIndices.size(), plan.hartid, os);
+  os << "};\n";
 }
 
 void emitApplicationTileSource(const MagiaApplicationDescription &application,
@@ -951,10 +970,10 @@ void emitApplicationTileSource(const MagiaApplicationDescription &application,
     emitTileSliceDescriptors(application, plan, stream);
     emitTileL2ReadDescriptors(application, plan, stream);
     emitTileRecvDescriptors(application, plan, stream);
+    emitFifoSlotDataSizes(application, plan, stream);
     emitTileOpDescriptors(application, plan, stream);
     emitTileSendDescriptors(application, plan, stream);
     emitTileL2WriteDescriptors(application, plan, stream);
-    emitFifoStorageHelper(stream);
     emitApplicationTilePlanConstructor(application, plan, stream);
   });
 }
@@ -1166,6 +1185,8 @@ void emitApplicationCMake(const MagiaApplicationDescription &application,
   os << "target_include_directories(" << application.outputStem
      << " PUBLIC include)\n";
   os << "target_compile_options(" << application.outputStem << " PRIVATE -O2)\n";
+  os << "set_property(SOURCE src/" << application.outputStem
+     << "_runner.c APPEND PROPERTY COMPILE_OPTIONS -O2)\n";
   os << "target_link_libraries(" << application.outputStem
      << " PUBLIC runtime hal idma_lib redmule_lib fsync_lib eu_lib";
   if (application.target != "magia-v3")
