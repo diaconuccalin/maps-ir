@@ -1081,6 +1081,10 @@ void emitApplicationRunner(const MagiaApplicationDescription &application,
   os << "  fsync_sync_global(&fsync);\n";
   os << "  eu_fsync_wait(&event_unit, " << uppercase(application.outputStem)
      << "_WAIT_MODE);\n";
+  os << "  if (active)\n";
+  os << "    maps_fifo_flush_experiment_trace(\n";
+  os << "        &plan, " << uppercase(application.outputStem)
+     << "_EXECUTION_TOKENS);\n";
   os << "  if (hartid == 0u) {\n";
   os << "    for (uint32_t token = 0u; token < "
      << uppercase(application.outputStem) << "_EXECUTION_TOKENS; ++token)\n";
