@@ -28,6 +28,12 @@ if "${plan_importer}" "${test_dir}/missing_execution.json" \
   exit 1
 fi
 
+"${plan_importer}" "${fixture_root}/conv2d.json" \
+  -o "${test_dir}/conv2d.mlir"
+grep -q 'maps.kernel.*kind = "CONV2D".*params = array<i64: 2, 2, 1, 2, 1, 1, 0, 0>' \
+  "${test_dir}/conv2d.mlir"
+! grep -q 'maps.conv2d' "${test_dir}/conv2d.mlir"
+
 granular_plan="${test_dir}/granular.plan.json"
 PYTHONPATH="${repo_root}/.." "${repo_root}/../.venv/bin/python" \
   "${fixture_root}/write_granular_sharding_fixture.py" "${granular_plan}"

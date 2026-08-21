@@ -2428,17 +2428,20 @@ importExecutionPlanDocument(StringRef input, MLIRContext *ctx) {
                             0, theoreticalWEnd - (*globalInputDims)[3]),
                     };
 
-                    OperationState state(loc, maps::Conv2DOp::getOperationName());
+                    SmallVector<int64_t> params = {
+                        (*strides)[0], (*strides)[1],
+                        (*dilations)[0], (*dilations)[1],
+                    };
+                    params.append(localPadding);
+
+                    OperationState state(loc, maps::KernelOp::getOperationName());
                     state.addOperands(inputValues);
                     state.addTypes(*outputType);
+                    state.addAttribute("kind", builder.getStringAttr("CONV2D"));
                     state.addAttribute(
-                        "strides", builder.getDenseI64ArrayAttr(*strides));
-                    state.addAttribute(
-                        "dilations", builder.getDenseI64ArrayAttr(*dilations));
-                    state.addAttribute(
-                        "padding", builder.getDenseI64ArrayAttr(localPadding));
-                    Operation *conv = builder.create(state);
-                    tileValues[*outputTensorId] = conv->getResult(0);
+                        "params", builder.getDenseI64ArrayAttr(params));
+                    Operation *kernel = builder.create(state);
+                    tileValues[*outputTensorId] = kernel->getResult(0);
                     continue;
                 }
 

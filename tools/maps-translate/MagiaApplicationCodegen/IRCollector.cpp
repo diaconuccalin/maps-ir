@@ -176,7 +176,7 @@ static LogicalResult collectRunRegion(Operation *runOp, MagiaApplicationDescript
     */
 
     if (name == "linalg.matmul" || name == "linalg.generic" ||
-        name == "maps.conv2d" || name == "maps.kernel") {
+        name == "maps.kernel") {
       if (failed(collectComputeOp(op, state, application)))
         return WalkResult::interrupt();
       return WalkResult::advance();
