@@ -852,6 +852,7 @@ getDescriptorKernelParams(StringRef kind, const llvm::json::Object &payload) {
                        packU16Pair((*pads)[2], (*pads)[3]),
                        packU16Pair((*inputDims)[2], (*inputDims)[3]),
                        packU16Pair(outputHeight, outputWidth)});
+        params.push_back(payload.getBoolean("channels_first").value_or(false));
         if (llvm::is_contained(params, -1))
             return std::nullopt;
     } else if (kind == "DEPTHWISE_CONV") {
@@ -967,12 +968,30 @@ static FailureOr<Value> emitDescriptorKernel(
 
     if (*kind == "MATMUL") {
         auto lhsType = dyn_cast<RankedTensorType>(inputValues[0].getType());
-        if (!lhsType || lhsType.getRank() != 2 || outputType->getRank() != 2)
+        auto rhsType = inputValues.size() > 1
+                           ? dyn_cast<RankedTensorType>(inputValues[1].getType())
+                           : RankedTensorType{};
+        if (!lhsType || !rhsType || lhsType.getRank() < 2 ||
+            rhsType.getRank() < 2)
             return failure();
+        int64_t batchVolume = 1;
+        int64_t matrixRows = lhsType.getShape()[lhsType.getRank() - 2];
+        int64_t matrixDepth = lhsType.getShape()[lhsType.getRank() - 1];
+        int64_t matrixColumns = rhsType.getShape()[rhsType.getRank() - 1];
+        bool convOutput = outputType->getRank() == 4 && lhsType.getRank() == 2 &&
+                          rhsType.getRank() == 2;
+        if (convOutput) {
+            matrixRows = outputType->getShape()[1];
+            matrixColumns = outputType->getShape()[2] * outputType->getShape()[3];
+        } else {
+            for (int64_t dimension : outputType->getShape().drop_back(2))
+                batchVolume *= dimension;
+        }
         params->clear();
         params->append(
-            {lhsType.getShape()[0], lhsType.getShape()[1],
-             outputType->getShape()[1], 1});
+            {matrixRows, matrixDepth, matrixColumns, batchVolume,
+             batchVolume > 1, batchVolume > 1, convOutput,
+             payload && payload->getBoolean("transpose_w").value_or(false)});
     }
 
     OperationState state(loc, maps::KernelOp::getOperationName());
@@ -2144,7 +2163,9 @@ importExecutionPlanDocument(StringRef input, MLIRContext *ctx) {
                     bool transposeW =
                         payload &&
                         payload->getBoolean("transpose_w").value_or(false);
-                    if (transposeW || inputs->size() == 3) {
+                    auto deviceName = layer->getString("device_name");
+                    bool useDescriptor = deviceName && *deviceName == "spatz";
+                    if (useDescriptor || transposeW || inputs->size() == 3) {
                         auto *output = (*outputs)[0].getAsObject();
                         auto kernel = output
                             ? emitDescriptorKernel(

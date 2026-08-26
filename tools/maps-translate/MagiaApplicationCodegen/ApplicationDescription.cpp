@@ -151,6 +151,8 @@ getRequiredSpatzTasks(const MagiaApplicationDescription &application) {
   if (application.target != "magia-v3")
     return {};
   bool needsAdd = false;
+  bool needsMul = false;
+  bool needsMatmul = false;
   bool needsRelu = false;
   bool needsSoftmaxExp = false;
   bool needsGroupReduce = false;
@@ -160,6 +162,8 @@ getRequiredSpatzTasks(const MagiaApplicationDescription &application) {
     if (op.deviceName != "spatz")
       continue;
     needsAdd |= op.kind == GeneratedOpKind::Add;
+    needsMul |= op.kind == GeneratedOpKind::Mul;
+    needsMatmul |= op.kind == GeneratedOpKind::Matmul;
     needsRelu |= op.kind == GeneratedOpKind::Relu;
     needsSoftmaxExp |= op.kind == GeneratedOpKind::SoftmaxExp;
     needsGroupReduce |= op.kind == GeneratedOpKind::GroupReduce;
@@ -173,6 +177,16 @@ getRequiredSpatzTasks(const MagiaApplicationDescription &application) {
                      "add/spatz_task/add_fp16_spatz_task.c", "add/include",
                      "ADD_FP16_SPATZ_TASK", "add_fp16_task",
                      "MAPS_HAS_ADD_SPATZ_TASK"});
+  if (needsMul)
+    tasks.push_back({GeneratedOpKind::Mul, "mul_bcast_fp16_spatz_task",
+                     "mul/spatz_task/mul_bcast_fp16_spatz_task.c", "mul/include",
+                     "MUL_BCAST_FP16_SPATZ_TASK", "mul_bcast_fp16_task",
+                     "MAPS_HAS_MUL_SPATZ_TASK"});
+  if (needsMatmul)
+    tasks.push_back({GeneratedOpKind::Matmul, "matmul_fp16_spatz_task",
+                     "matmul/spatz_task/matmul_fp16_spatz_task.c", "matmul/include",
+                     "MATMUL_FP16_SPATZ_TASK", "matmul_fp16_task",
+                     "MAPS_HAS_MATMUL_SPATZ_TASK"});
   if (needsRelu)
     tasks.push_back({GeneratedOpKind::Relu, "relu_fp16_spatz_task",
                      "relu/spatz_task/relu_fp16_spatz_task.c", "relu/include",
@@ -212,6 +226,8 @@ LogicalResult validateSpatzTaskCoverage(
     return success();
   for (const GeneratedOp &op : application.ops) {
     if (op.deviceName == "spatz" && op.kind != GeneratedOpKind::Add &&
+        op.kind != GeneratedOpKind::Mul &&
+        op.kind != GeneratedOpKind::Matmul &&
         op.kind != GeneratedOpKind::Relu &&
         op.kind != GeneratedOpKind::SoftmaxExp &&
         op.kind != GeneratedOpKind::GroupReduce &&
