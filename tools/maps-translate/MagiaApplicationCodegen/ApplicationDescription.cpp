@@ -158,6 +158,7 @@ getRequiredSpatzTasks(const MagiaApplicationDescription &application) {
   bool needsGroupReduce = false;
   bool needsGroupCenteredReduce = false;
   bool needsGroupNormalize = false;
+  bool needsReduceSum = false;
   for (const GeneratedOp &op : application.ops) {
     if (op.deviceName != "spatz")
       continue;
@@ -169,6 +170,7 @@ getRequiredSpatzTasks(const MagiaApplicationDescription &application) {
     needsGroupReduce |= op.kind == GeneratedOpKind::GroupReduce;
     needsGroupCenteredReduce |= op.kind == GeneratedOpKind::GroupCenteredReduce;
     needsGroupNormalize |= op.kind == GeneratedOpKind::GroupNormalize;
+    needsReduceSum |= op.kind == GeneratedOpKind::ReduceSum;
   }
 
   SmallVector<GeneratedSpatzTask> tasks;
@@ -217,6 +219,11 @@ getRequiredSpatzTasks(const MagiaApplicationDescription &application) {
                      "group_normalize/include", "GROUP_NORMALIZE_FP16_SPATZ_TASK",
                      "group_normalize_fp16_task",
                      "MAPS_HAS_GROUP_NORMALIZE_SPATZ_TASK"});
+  if (needsReduceSum)
+    tasks.push_back({GeneratedOpKind::ReduceSum, "reducesum_fp16_spatz_task",
+                     "reducesum/spatz_task/reducesum_fp16_spatz_task.c",
+                     "reducesum/include", "REDUCESUM_FP16_SPATZ_TASK",
+                     "reducesum_fp16_task", "MAPS_HAS_REDUCE_SUM_SPATZ_TASK"});
   return tasks;
 }
 
@@ -232,7 +239,8 @@ LogicalResult validateSpatzTaskCoverage(
         op.kind != GeneratedOpKind::SoftmaxExp &&
         op.kind != GeneratedOpKind::GroupReduce &&
         op.kind != GeneratedOpKind::GroupCenteredReduce &&
-        op.kind != GeneratedOpKind::GroupNormalize) {
+        op.kind != GeneratedOpKind::GroupNormalize &&
+        op.kind != GeneratedOpKind::ReduceSum) {
       llvm::errs() << "MAGIA-v3 has no Tile-Local Spatz Task for "
                    << static_cast<unsigned>(op.kind) << "\n";
       return failure();
