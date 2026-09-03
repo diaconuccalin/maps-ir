@@ -159,6 +159,7 @@ getRequiredSpatzTasks(const MagiaApplicationDescription &application) {
   bool needsGroupCenteredReduce = false;
   bool needsGroupNormalize = false;
   bool needsReduceSum = false;
+  bool needsReduceMax = false;
   bool needsBinaryBcast = false;
   for (const GeneratedOp &op : application.ops) {
     if (op.deviceName != "spatz")
@@ -171,7 +172,9 @@ getRequiredSpatzTasks(const MagiaApplicationDescription &application) {
     needsGroupReduce |= op.kind == GeneratedOpKind::GroupReduce;
     needsGroupCenteredReduce |= op.kind == GeneratedOpKind::GroupCenteredReduce;
     needsGroupNormalize |= op.kind == GeneratedOpKind::GroupNormalize;
-    needsReduceSum |= op.kind == GeneratedOpKind::ReduceSum;
+    needsReduceSum |= op.kind == GeneratedOpKind::ReduceSum ||
+                      op.kind == GeneratedOpKind::AllReduceSum;
+    needsReduceMax |= op.kind == GeneratedOpKind::AllReduceMax;
     needsBinaryBcast |= op.kind == GeneratedOpKind::Sub || op.kind == GeneratedOpKind::Div;
   }
 
@@ -226,6 +229,11 @@ getRequiredSpatzTasks(const MagiaApplicationDescription &application) {
                      "reducesum/spatz_task/reducesum_fp16_spatz_task.c",
                      "reducesum/include", "REDUCESUM_FP16_SPATZ_TASK",
                      "reducesum_fp16_task", "MAPS_HAS_REDUCE_SUM_SPATZ_TASK"});
+  if (needsReduceMax)
+    tasks.push_back({GeneratedOpKind::AllReduceMax, "reducemax_fp16_spatz_task",
+                     "reducemax/spatz_task/reducemax_fp16_spatz_task.c",
+                     "reducemax/include", "REDUCEMAX_FP16_SPATZ_TASK",
+                     "reducemax_fp16_task", "MAPS_HAS_REDUCE_MAX_SPATZ_TASK"});
   if (needsBinaryBcast)
     tasks.push_back({GeneratedOpKind::Sub, "binary_bcast_fp16_spatz_task",
                      "binary_bcast/spatz_task/binary_bcast_fp16_spatz_task.c",
@@ -247,7 +255,9 @@ LogicalResult validateSpatzTaskCoverage(
         op.kind != GeneratedOpKind::GroupReduce &&
         op.kind != GeneratedOpKind::GroupCenteredReduce &&
         op.kind != GeneratedOpKind::GroupNormalize &&
-        op.kind != GeneratedOpKind::ReduceSum && op.kind != GeneratedOpKind::Sub &&
+        op.kind != GeneratedOpKind::ReduceSum &&
+        op.kind != GeneratedOpKind::AllReduceMax &&
+        op.kind != GeneratedOpKind::AllReduceSum && op.kind != GeneratedOpKind::Sub &&
         op.kind != GeneratedOpKind::Div) {
       llvm::errs() << "MAGIA-v3 has no Tile-Local Spatz Task for "
                    << static_cast<unsigned>(op.kind) << "\n";
