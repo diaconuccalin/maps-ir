@@ -174,7 +174,8 @@ getRequiredSpatzTasks(const MagiaApplicationDescription &application) {
     needsGroupNormalize |= op.kind == GeneratedOpKind::GroupNormalize;
     needsReduceSum |= op.kind == GeneratedOpKind::ReduceSum ||
                       op.kind == GeneratedOpKind::AllReduceSum;
-    needsReduceMax |= op.kind == GeneratedOpKind::AllReduceMax;
+    needsReduceMax |= op.kind == GeneratedOpKind::ReduceMax ||
+                      op.kind == GeneratedOpKind::AllReduceMax;
     needsBinaryBcast |= op.kind == GeneratedOpKind::Sub || op.kind == GeneratedOpKind::Div;
   }
 
@@ -256,6 +257,7 @@ LogicalResult validateSpatzTaskCoverage(
         op.kind != GeneratedOpKind::GroupCenteredReduce &&
         op.kind != GeneratedOpKind::GroupNormalize &&
         op.kind != GeneratedOpKind::ReduceSum &&
+        op.kind != GeneratedOpKind::ReduceMax &&
         op.kind != GeneratedOpKind::AllReduceMax &&
         op.kind != GeneratedOpKind::AllReduceSum && op.kind != GeneratedOpKind::Sub &&
         op.kind != GeneratedOpKind::Div) {

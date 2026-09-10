@@ -1052,26 +1052,16 @@ void emitApplicationRunner(const MagiaApplicationDescription &application,
   os << "  fifo_tile_plan_t plan;\n";
   os << "  const uint32_t active = " << application.outputStem
      << "_build_plan(&plan, hartid, &runtime);\n";
-  os << "  if (hartid == 0u)\n";
-  os << "    printf(\"[DEBUG-maps-startup] plan ready (active=%u)\\n\", active);\n";
   if (!spatzTasks.empty()) {
     os << "  if (active && maps_operation_runtime_init(&runtime) != 0)\n";
     os << "    return -1;\n";
-    os << "  if (hartid == 0u)\n";
-    os << "    printf(\"[DEBUG-maps-startup] Spatz ready\\n\");\n";
   }
   os << "  if (active)\n";
   os << "    maps_fifo_init(&plan);\n\n";
-  os << "  if (hartid == 0u)\n";
-  os << "    printf(\"[DEBUG-maps-startup] entering first barrier\\n\");\n";
   os << "  fsync_sync_level(&fsync, MAX_SYNC_LVL - 1, 0);\n";
   os << "  eu_fsync_wait(&event_unit, " << uppercase(application.outputStem)
      << "_WAIT_MODE);\n";
-  os << "  if (hartid == 0u)\n";
-  os << "    printf(\"[DEBUG-maps-startup] left first barrier\\n\");\n";
   os << "  " << application.outputStem << "_initialize_data(hartid);\n";
-  os << "  if (hartid == 0u)\n";
-  os << "    printf(\"[DEBUG-maps-startup] initialized data\\n\");\n";
   os << "  if (hartid == 0u) {\n";
   os << "    for (uint32_t token = 0u; token < "
      << uppercase(application.outputStem) << "_EXECUTION_TOKENS; ++token)\n";
