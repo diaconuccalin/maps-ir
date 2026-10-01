@@ -1053,7 +1053,7 @@ void emitApplicationRunner(const MagiaApplicationDescription &application,
   os << "  const uint32_t active = " << application.outputStem
      << "_build_plan(&plan, hartid, &runtime);\n";
   if (!spatzTasks.empty()) {
-    os << "  if (active && maps_operation_runtime_init(&runtime) != 0)\n";
+    os << "  if (maps_operation_runtime_init(&runtime) != 0)\n";
     os << "    return -1;\n";
   }
   os << "  if (active)\n";
