@@ -363,6 +363,165 @@ static void emitRecvDesc(const MagiaApplicationDescription &application,
   os << "  }";
 }
 
+// Decides which receives the magia-v3 runtime gathers in place: slices whose
+// receives tile them exactly, each on its own FIFO sub-ring, get a shared
+// payload ring that mirrors the slice's planned storage.  The receiver's FIFO
+// layout and every sender's payload mode are emitted from this one decision.
+static constexpr unsigned kRuntimeMaxSliceAliases = 8;
+
+static bool isSliceInplaceEligible(const MagiaApplicationDescription &application,
+                                   const GeneratedTilePlan &plan,
+                                   unsigned sliceIndex) {
+  auto readsSlice = [&](unsigned subsliceIndex) {
+    return application.subslices[subsliceIndex].sliceIndex == sliceIndex;
+  };
+  for (unsigned readIndex : plan.l2ReadIndices)
+    if (readsSlice(application.l2Reads[readIndex].dstSubsliceIndex))
+      return false;
+  for (unsigned sendIndex : plan.sendIndices)
+    if (readsSlice(application.sends[sendIndex].srcSubsliceIndex))
+      return false;
+  for (unsigned writeIndex : plan.l2WriteIndices)
+    if (readsSlice(application.l2Writes[writeIndex].srcSubsliceIndex))
+      return false;
+  for (unsigned opIndex : plan.opIndices) {
+    const GeneratedOp &op = application.ops[opIndex];
+    if (op.kind != GeneratedOpKind::AllReduceMax &&
+        op.kind != GeneratedOpKind::AllReduceSum && !op.isCollective)
+      continue;
+    if (llvm::any_of(op.inputSubsliceIndices, readsSlice) ||
+        llvm::any_of(op.outputSubsliceIndices, readsSlice))
+      return false;
+  }
+  return true;
+}
+
+static bool recvOwnsSubring(const MagiaApplicationDescription &application,
+                            const GeneratedTilePlan &plan, unsigned position) {
+  unsigned producer = application.recvs[plan.recvIndices[position]].producerIdx;
+  for (unsigned i = 0; i < plan.recvIndices.size(); ++i)
+    if (i != position &&
+        application.recvs[plan.recvIndices[i]].producerIdx == producer)
+      return false;
+  return true;
+}
+
+static bool isRecvInplaceEligible(const MagiaApplicationDescription &application,
+                                  const GeneratedTilePlan &plan,
+                                  unsigned position) {
+  const GeneratedRecv &recv = application.recvs[plan.recvIndices[position]];
+  const GeneratedSubslice &dst = application.subslices[recv.dstSubsliceIndex];
+  const GeneratedSlice &slice = application.slices[dst.sliceIndex];
+  if (slice.globalKind == GeneratedGlobalKind::Initializer)
+    return false;
+  if (dst.shape.size() != slice.shape.size() || dst.shape.empty() ||
+      dst.elemBytes != slice.elemBytes)
+    return false;
+
+  uint64_t packedStride = dst.elemBytes;
+  for (unsigned d = dst.shape.size(); d-- > 0;) {
+    if (dst.offset[d] != 0 || dst.shape[d] != slice.shape[d] ||
+        dst.stridesBytes[d] != slice.stridesBytes[d] ||
+        slice.stridesBytes[d] != packedStride)
+      return false;
+    packedStride *= dst.shape[d];
+  }
+  for (unsigned i = 0; i < plan.recvIndices.size(); ++i)
+    if (i != position &&
+        application.subslices[application.recvs[plan.recvIndices[i]].dstSubsliceIndex]
+                .sliceIndex == dst.sliceIndex)
+      return false;
+  return recvOwnsSubring(application, plan, position) &&
+         isSliceInplaceEligible(application, plan, dst.sliceIndex);
+}
+
+static bool isSliceGatherEligible(const MagiaApplicationDescription &application,
+                                  const GeneratedTilePlan &plan,
+                                  unsigned sliceIndex) {
+  const GeneratedSlice &slice = application.slices[sliceIndex];
+  if (slice.globalKind == GeneratedGlobalKind::Initializer || slice.shape.empty() ||
+      !isSliceInplaceEligible(application, plan, sliceIndex))
+    return false;
+
+  uint64_t covered = 0;
+  for (unsigned i = 0; i < plan.recvIndices.size(); ++i) {
+    const GeneratedSubslice &dst =
+        application.subslices[application.recvs[plan.recvIndices[i]].dstSubsliceIndex];
+    if (dst.sliceIndex != sliceIndex)
+      continue;
+    if (dst.shape.size() != slice.shape.size() || dst.elemBytes != slice.elemBytes ||
+        application.recvs[plan.recvIndices[i]].producerIdx >= plan.recvIndices.size() ||
+        !recvOwnsSubring(application, plan, i))
+      return false;
+    for (unsigned d = 0; d < dst.shape.size(); ++d)
+      if (dst.stridesBytes[d] != slice.stridesBytes[d] ||
+          dst.offset[d] + dst.shape[d] > slice.shape[d])
+        return false;
+    for (unsigned j = 0; j < i; ++j) {
+      const GeneratedSubslice &other = application.subslices
+          [application.recvs[plan.recvIndices[j]].dstSubsliceIndex];
+      if (other.sliceIndex != sliceIndex)
+        continue;
+      bool overlap = true;
+      for (unsigned d = 0; d < dst.shape.size(); ++d)
+        if (other.offset[d] + other.shape[d] <= dst.offset[d] ||
+            dst.offset[d] + dst.shape[d] <= other.offset[d])
+          overlap = false;
+      if (overlap)
+        return false;
+    }
+    covered += product(dst.shape);
+  }
+  return covered != 0 && covered == product(slice.shape);
+}
+
+struct GatheredFifoLayout {
+  // Per destination-local producer: the 1-based shared ring it gathers into,
+  // or 0 when its payloads stay in its own slots.
+  SmallVector<unsigned> payloadRings;
+  // Bytes per slot of each shared ring (the gathered slice's slot size).
+  SmallVector<uint64_t> ringBytes;
+};
+
+static GatheredFifoLayout
+getGatheredFifoLayout(const MagiaApplicationDescription &application,
+                      const GeneratedTilePlan &plan) {
+  GatheredFifoLayout layout;
+  layout.payloadRings.assign(plan.recvIndices.size(), 0);
+  for (unsigned i = 0; i < plan.recvIndices.size() &&
+                       layout.ringBytes.size() < kRuntimeMaxSliceAliases;
+       ++i) {
+    unsigned sliceIndex =
+        application.subslices[application.recvs[plan.recvIndices[i]].dstSubsliceIndex]
+            .sliceIndex;
+    bool first = true;
+    for (unsigned j = 0; j < i; ++j)
+      first &= application.subslices[application.recvs[plan.recvIndices[j]]
+                                         .dstSubsliceIndex]
+                   .sliceIndex != sliceIndex;
+    if (!first || isRecvInplaceEligible(application, plan, i) ||
+        !isSliceGatherEligible(application, plan, sliceIndex))
+      continue;
+    layout.ringBytes.push_back(application.slices[sliceIndex].slotBytes);
+    for (unsigned j = i; j < plan.recvIndices.size(); ++j) {
+      const GeneratedRecv &recv = application.recvs[plan.recvIndices[j]];
+      if (application.subslices[recv.dstSubsliceIndex].sliceIndex == sliceIndex)
+        layout.payloadRings[recv.producerIdx] = layout.ringBytes.size();
+    }
+  }
+  return layout;
+}
+
+static bool isGatheredSend(const MagiaApplicationDescription &application,
+                           const GeneratedSend &send) {
+  auto it = application.tilePlans.find(send.dstHartid);
+  if (it == application.tilePlans.end())
+    llvm_unreachable("send targets a tile without a plan");
+  GatheredFifoLayout layout = getGatheredFifoLayout(application, it->second);
+  return send.producerIdx < layout.payloadRings.size() &&
+         layout.payloadRings[send.producerIdx] != 0;
+}
+
 static void emitSendDesc(const MagiaApplicationDescription &application,
                          const GeneratedSend &send,
                          llvm::raw_ostream &os) {
@@ -390,6 +549,14 @@ static void emitSendDesc(const MagiaApplicationDescription &application,
   emitTensorSubSlice(dst.shape, dst.stridesBytes, os);
   os << ",\n";
   os << "    .producer_idx = " << send.producerIdx << ",\n";
+  if (application.target == "magia-v3") {
+    bool gathered = isGatheredSend(application, send);
+    os << "    .dst_payload_mode = "
+       << (gathered ? "FIFO_PAYLOAD_SHARED" : "FIFO_PAYLOAD_INLINE") << ",\n";
+    os << "    .dst_offset_bytes = "
+       << (gathered ? computeOffsetBytes(dst.offset, dst.stridesBytes) : 0)
+       << "u,\n";
+  }
   os << "  }";
 }
 
@@ -453,6 +620,32 @@ static uint64_t getSubsliceL1Offset(const MagiaApplicationDescription &applicati
 static uint64_t getFifoSlotDataSize(const MagiaApplicationDescription &application,
                                     unsigned recvIndex);
 
+// Bytes the magia-v3 FIFO takes on this tile: the plain variable layout, or,
+// when the tile gathers slices in place, the shared layout the runtime builds
+// (members keep metadata-only slots, plus the payload map and shared rings).
+static void emitFifoLayoutBytes(const MagiaApplicationDescription &application,
+                                const GeneratedTilePlan &plan,
+                                llvm::raw_ostream &os) {
+  GatheredFifoLayout layout = getGatheredFifoLayout(application, plan);
+  unsigned numProducers = plan.recvIndices.size();
+  os << "FIFO_HEADER_SIZE + " << numProducers
+     << "u * FIFO_RING_STATE_SIZE + " << numProducers + 1
+     << "u * FIFO_SLOT_OFFSET_SIZE";
+  for (unsigned i = 0; i < numProducers; ++i) {
+    uint64_t dataBytes =
+        !layout.ringBytes.empty() && layout.payloadRings[i] != 0
+            ? 0
+            : getFifoSlotDataSize(application, plan.recvIndices[i]);
+    os << " + MAPS_NUM_TOKEN_SLOTS * (FIFO_SLOT_META_SIZE + ((" << dataBytes
+       << "u + 3u) & ~3u))";
+  }
+  if (layout.ringBytes.empty())
+    return;
+  os << " + " << numProducers << "u * FIFO_PAYLOAD_RING_SIZE";
+  for (uint64_t bytes : layout.ringBytes)
+    os << " + MAPS_NUM_TOKEN_SLOTS * ((" << bytes << "u + 3u) & ~3u)";
+}
+
 static void emitL1DataBaseOffset(const MagiaApplicationDescription &application,
                                  int64_t hartid, llvm::raw_ostream &os) {
   const GeneratedTilePlan &plan = application.tilePlans.find(hartid)->second;
@@ -467,12 +660,7 @@ static void emitL1DataBaseOffset(const MagiaApplicationDescription &application,
        << slotDataSize << "u + 3u) & ~3u))";
     return;
   }
-  os << "FIFO_HEADER_SIZE + " << plan.recvIndices.size()
-     << "u * FIFO_RING_STATE_SIZE + " << plan.recvIndices.size() + 1
-     << "u * FIFO_SLOT_OFFSET_SIZE";
-  for (unsigned recvIndex : plan.recvIndices)
-    os << " + MAPS_NUM_TOKEN_SLOTS * (FIFO_SLOT_META_SIZE + (("
-       << getFifoSlotDataSize(application, recvIndex) << "u + 3u) & ~3u))";
+  emitFifoLayoutBytes(application, plan, os);
 }
 
 static void emitOpDesc(const MagiaApplicationDescription &application,
@@ -676,6 +864,40 @@ static void emitFifoSlotDataSizes(const MagiaApplicationDescription &application
     os << getFifoSlotDataSize(application, plan.recvIndices[i]) << "u";
   }
   os << "};\n\n";
+
+  GatheredFifoLayout layout = getGatheredFifoLayout(application, plan);
+  if (layout.ringBytes.empty())
+    return;
+  os << "static const uint32_t maps_application_tile_" << plan.hartid
+     << "_fifo_payload_rings[] = {";
+  for (unsigned i = 0; i < layout.payloadRings.size(); ++i)
+    os << (i != 0 ? ", " : "") << layout.payloadRings[i] << "u";
+  os << "};\n\n";
+  os << "static const uint32_t maps_application_tile_" << plan.hartid
+     << "_fifo_shared_ring_bytes[] = {";
+  for (unsigned i = 0; i < layout.ringBytes.size(); ++i)
+    os << (i != 0 ? ", " : "") << layout.ringBytes[i] << "u";
+  os << "};\n\n";
+
+  // The shared layout (gathering members keep metadata-only slots) must fit
+  // in the FIFO region reserved for the plain layout.
+  unsigned numProducers = plan.recvIndices.size();
+  os << "_Static_assert(FIFO_HEADER_SIZE + " << numProducers
+     << "u * FIFO_RING_STATE_SIZE + " << numProducers + 1
+     << "u * FIFO_SLOT_OFFSET_SIZE";
+  for (unsigned i = 0; i < numProducers; ++i) {
+    uint64_t dataBytes = layout.payloadRings[i] != 0
+                             ? 0
+                             : getFifoSlotDataSize(application, plan.recvIndices[i]);
+    os << " + MAPS_APPLICATION_NUM_TOKEN_SLOTS * (FIFO_SLOT_META_SIZE + (("
+       << dataBytes << "u + 3u) & ~3u))";
+  }
+  os << " + " << numProducers << "u * FIFO_PAYLOAD_RING_SIZE";
+  for (uint64_t bytes : layout.ringBytes)
+    os << " + MAPS_APPLICATION_NUM_TOKEN_SLOTS * ((" << bytes << "u + 3u) & ~3u)";
+  os << " <= ";
+  emitL1DataBaseOffset(application, plan.hartid, os);
+  os << ", \"shared FIFO payload rings exceed the reserved FIFO region\");\n\n";
 }
 
 static void emitPlanArrayInitializer(StringRef fieldName, StringRef arraySuffix,
@@ -933,9 +1155,18 @@ static void emitApplicationTilePlanConstructor(
   os << "    .l1_offset_bytes = 0u,\n";
   os << "    .num_producers = " << plan.recvIndices.size() << "u,\n";
   os << "    .num_slots = MAPS_APPLICATION_NUM_TOKEN_SLOTS,\n";
-  if (application.target == "magia-v3" && !plan.recvIndices.empty())
+  if (application.target == "magia-v3" && !plan.recvIndices.empty()) {
     os << "    .slot_data_sizes = maps_application_tile_" << plan.hartid
        << "_fifo_slot_data_sizes,\n";
+    GatheredFifoLayout layout = getGatheredFifoLayout(application, plan);
+    if (!layout.ringBytes.empty()) {
+      os << "    .payload_rings = maps_application_tile_" << plan.hartid
+         << "_fifo_payload_rings,\n";
+      os << "    .num_shared_rings = " << layout.ringBytes.size() << "u,\n";
+      os << "    .shared_ring_bytes = maps_application_tile_" << plan.hartid
+         << "_fifo_shared_ring_bytes,\n";
+    }
+  }
   if (application.target != "magia-v3") {
     uint64_t slotDataSize = 0;
     for (unsigned recvIndex : plan.recvIndices)
