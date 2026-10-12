@@ -1132,6 +1132,14 @@ void emitApplicationDataSource(const MagiaApplicationDescription &application,
   }
 }
 
+static void emitTileDescriptorL1Offset(const MagiaApplicationDescription &application,
+                                       const GeneratedTilePlan &plan,
+                                       llvm::raw_ostream &os) {
+  os << "((";
+  emitL1DataBaseOffset(application, plan.hartid, os);
+  os << " + " << plan.l1DataBytes << "u + 15u) & ~15u)";
+}
+
 static void emitApplicationTilePlanConstructor(
     const MagiaApplicationDescription &application, const GeneratedTilePlan &plan,
     llvm::raw_ostream &os) {
@@ -1189,7 +1197,32 @@ static void emitApplicationTilePlanConstructor(
                            plan.hartid, os);
   emitPlanArrayInitializer("l2_writes", "l2_writes",
                            plan.l2WriteIndices.size(), plan.hartid, os);
+  if (application.target == "magia-v3") {
+    // Descriptors are copied to L1 right after the planned slice data.
+    os << "  .descriptor_l1_offset = ";
+    emitTileDescriptorL1Offset(application, plan, os);
+    os << ",\n";
+  }
   os << "};\n";
+  if (application.target == "magia-v3") {
+    os << "\n_Static_assert(";
+    emitTileDescriptorL1Offset(application, plan, os);
+    auto addArray = [&](StringRef suffix, size_t count) {
+      if (count != 0)
+        os << " + ((sizeof(maps_application_tile_" << plan.hartid << "_"
+           << suffix << ") + 15u) & ~15u)";
+    };
+    addArray("slices", plan.sliceIndices.size());
+    addArray("init_l2_reads", plan.initL2ReadIndices.size());
+    addArray("l2_reads", plan.l2ReadIndices.size());
+    addArray("recvs", plan.recvIndices.size());
+    addArray("ops", plan.opIndices.size());
+    addArray("sends", plan.sendIndices.size());
+    addArray("l2_writes", plan.l2WriteIndices.size());
+    addArray("fifo_slot_data_sizes", plan.recvIndices.size());
+    os << " <= MAPS_V3_TASK_SCRATCH_OFFSET, "
+          "\"L1 descriptor copy overlaps task scratch\");\n";
+  }
 }
 
 void emitApplicationTileSource(const MagiaApplicationDescription &application,
@@ -1301,6 +1334,10 @@ void emitApplicationRunner(const MagiaApplicationDescription &application,
   os << "  fsync_sync_global(&fsync);\n";
   os << "  eu_fsync_wait(&event_unit, " << uppercase(application.outputStem)
      << "_WAIT_MODE);\n";
+  if (application.target == "magia-v3") {
+    os << "  if (active)\n";
+    os << "    maps_fifo_plan_to_l1(&plan, &idma, &event_unit);\n";
+  }
   os << "  if (active)\n";
   os << "    maps_fifo_init_tile(&plan, &idma, &event_unit);\n";
   os << "  fsync_sync_global(&fsync);\n";
