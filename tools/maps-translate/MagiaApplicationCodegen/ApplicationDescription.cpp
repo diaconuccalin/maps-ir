@@ -154,6 +154,8 @@ getRequiredSpatzTasks(const MagiaApplicationDescription &application) {
   bool needsMul = false;
   bool needsMatmul = false;
   bool needsRelu = false;
+  bool needsSigmoid = false;
+  bool needsDepthwiseConv = false;
   bool needsSoftmaxExp = false;
   bool needsGroupReduce = false;
   bool needsGroupCenteredReduce = false;
@@ -162,6 +164,8 @@ getRequiredSpatzTasks(const MagiaApplicationDescription &application) {
   bool needsReduceMax = false;
   bool needsBinaryBcast = false;
   for (const GeneratedOp &op : application.ops) {
+    needsSigmoid |= op.kind == GeneratedOpKind::Sigmoid;
+    needsDepthwiseConv |= op.kind == GeneratedOpKind::DepthwiseConv;
     if (op.deviceName != "spatz")
       continue;
     needsAdd |= op.kind == GeneratedOpKind::Add;
@@ -195,6 +199,16 @@ getRequiredSpatzTasks(const MagiaApplicationDescription &application) {
                      "matmul/spatz_task/matmul_fp16_spatz_task.c", "matmul/include",
                      "MATMUL_FP16_SPATZ_TASK", "matmul_fp16_task",
                      "MAPS_HAS_MATMUL_SPATZ_TASK"});
+  if (needsDepthwiseConv)
+    tasks.push_back({GeneratedOpKind::DepthwiseConv, "depthwise_conv_fp16_spatz_task",
+                     "depthwise_conv/spatz_task/depthwise_conv_fp16_spatz_task.c", "depthwise_conv/include",
+                     "DEPTHWISE_CONV_FP16_SPATZ_TASK", "depthwise_conv_fp16_task",
+                     "MAPS_HAS_DEPTHWISE_CONV_SPATZ_TASK"});
+  if (needsSigmoid)
+    tasks.push_back({GeneratedOpKind::Sigmoid, "sigmoid_fp16_spatz_task",
+                     "sigmoid/spatz_task/sigmoid_fp16_spatz_task.c", "sigmoid/include",
+                     "SIGMOID_FP16_SPATZ_TASK", "sigmoid_fp16_task",
+                     "MAPS_HAS_SIGMOID_SPATZ_TASK"});
   if (needsRelu)
     tasks.push_back({GeneratedOpKind::Relu, "relu_fp16_spatz_task",
                      "relu/spatz_task/relu_fp16_spatz_task.c", "relu/include",
