@@ -1276,30 +1276,15 @@ void emitApplicationRunner(const MagiaApplicationDescription &application,
   os << "    maps_operation_runtime_t *runtime);\n\n";
   os << "int " << application.outputStem << "_run(void) {\n";
   os << "  const uint32_t hartid = get_hartid();\n";
-  os << "  idma_config_t idma_config = {.hartid = hartid};\n";
-  os << "  idma_controller_t idma = {\n";
-  os << "      .base = 0, .cfg = &idma_config, .api = &idma_api};\n";
-  os << "  redmule_config_t redmule_config = {.hartid = hartid};\n";
-  os << "  redmule_controller_t redmule = {\n";
-  os << "      .base = 0, .cfg = &redmule_config, .api = &redmule_api};\n";
-  os << "  fsync_config_t fsync_config = {.hartid = hartid};\n";
-  os << "  fsync_controller_t fsync = {\n";
-  os << "      .base = 0, .cfg = &fsync_config, .api = &fsync_api};\n";
-  os << "  eu_config_t eu_config = {.hartid = hartid};\n";
-  os << "  eu_controller_t event_unit = {\n";
-  os << "      .base = 0, .cfg = &eu_config, .api = &eu_api};\n\n";
-  os << "  idma_init(&idma);\n";
-  os << "  redmule_init(&redmule);\n";
-  os << "  fsync_init(&fsync);\n";
-  os << "  eu_init(&event_unit);\n";
+  os << "  idma_init();\n";
+  os << "  redmule_init();\n";
+  os << "  fsync_init();\n";
+  os << "  eu_init();\n";
   os << "  eu_clear_events(0xffffffffu);\n";
-  os << "  eu_fsync_init(&event_unit, 0u);\n";
-  os << "  eu_idma_init(&event_unit, 0u);\n";
-  os << "  eu_redmule_init(&event_unit, 0u);\n\n";
+  os << "  eu_fsync_init(0u);\n";
+  os << "  eu_idma_init(0u);\n";
+  os << "  eu_redmule_init(0u);\n\n";
   os << "  maps_operation_runtime_t runtime;\n";
-  os << "  runtime.idma_ctrl = &idma;\n";
-  os << "  runtime.redmule_ctrl = &redmule;\n";
-  os << "  runtime.eu_ctrl = &event_unit;\n";
   if (!spatzTasks.empty()) {
     os << "  runtime.kernel_abi_version = " << kGeneratedKernelAbiVersion
        << "u;\n";
@@ -1322,8 +1307,8 @@ void emitApplicationRunner(const MagiaApplicationDescription &application,
   }
   os << "  if (active)\n";
   os << "    maps_fifo_init(&plan);\n\n";
-  os << "  fsync_sync_level(&fsync, MAX_SYNC_LVL - 1, 0);\n";
-  os << "  eu_fsync_wait(&event_unit, " << uppercase(application.outputStem)
+  os << "  fsync_sync_level(MAX_SYNC_LVL - 1, 0);\n";
+  os << "  eu_fsync_wait(" << uppercase(application.outputStem)
      << "_WAIT_MODE);\n";
   os << "  " << application.outputStem << "_initialize_data(hartid);\n";
   os << "  if (hartid == 0u) {\n";
@@ -1331,24 +1316,24 @@ void emitApplicationRunner(const MagiaApplicationDescription &application,
      << uppercase(application.outputStem) << "_EXECUTION_TOKENS; ++token)\n";
   os << "      " << application.outputStem << "_handle_input(token);\n";
   os << "  }\n";
-  os << "  fsync_sync_global(&fsync);\n";
-  os << "  eu_fsync_wait(&event_unit, " << uppercase(application.outputStem)
+  os << "  fsync_sync_global();\n";
+  os << "  eu_fsync_wait(" << uppercase(application.outputStem)
      << "_WAIT_MODE);\n";
   if (application.target == "magia-v3") {
     os << "  if (active)\n";
-    os << "    maps_fifo_plan_to_l1(&plan, &idma, &event_unit);\n";
+    os << "    maps_fifo_plan_to_l1(&plan);\n";
   }
   os << "  if (active)\n";
-  os << "    maps_fifo_init_tile(&plan, &idma, &event_unit);\n";
-  os << "  fsync_sync_global(&fsync);\n";
-  os << "  eu_fsync_wait(&event_unit, " << uppercase(application.outputStem)
+  os << "    maps_fifo_init_tile(&plan);\n";
+  os << "  fsync_sync_global();\n";
+  os << "  eu_fsync_wait(" << uppercase(application.outputStem)
      << "_WAIT_MODE);\n";
   os << "  if (active)\n";
   os << "    maps_fifo_run_tile_tokens(\n";
   os << "        &plan, " << uppercase(application.outputStem)
-     << "_EXECUTION_TOKENS, &idma, &event_unit);\n";
-  os << "  fsync_sync_global(&fsync);\n";
-  os << "  eu_fsync_wait(&event_unit, " << uppercase(application.outputStem)
+     << "_EXECUTION_TOKENS);\n";
+  os << "  fsync_sync_global();\n";
+  os << "  eu_fsync_wait(" << uppercase(application.outputStem)
      << "_WAIT_MODE);\n";
   os << "  if (active)\n";
   os << "    maps_fifo_flush_experiment_trace(\n";
@@ -1426,7 +1411,7 @@ void emitApplicationCMake(const MagiaApplicationDescription &application,
       getRequiredSpatzTasks(application);
   os << "set(MAPS_APPLICATION " << application.outputStem << ")\n\n";
   if (!spatzTasks.empty()) {
-    os << "set(MAPS_SPATZ_KERNELS_DIR ${CMAKE_SOURCE_DIR}/kernels/spatz_fp16)\n";
+    os << "set(MAPS_SPATZ_KERNELS_DIR ${CMAKE_SOURCE_DIR}/kernels)\n";
     os << "add_spatz_task(\n";
     os << "  TEST_NAME ${MAPS_APPLICATION}\n";
     os << "  TASK_SOURCES\n";
