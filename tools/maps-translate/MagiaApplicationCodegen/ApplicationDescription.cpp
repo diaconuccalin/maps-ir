@@ -201,12 +201,13 @@ getRequiredSpatzTasks(const MagiaApplicationDescription &application) {
                      "MAPS_HAS_MATMUL_SPATZ_TASK"});
   if (needsDepthwiseConv)
     tasks.push_back({GeneratedOpKind::DepthwiseConv, "depthwise_conv_fp16_spatz_task",
-                     "depthwise_conv/spatz_task/depthwise_conv_fp16_spatz_task.c", "depthwise_conv/include",
+                     "depthwise_conv/fp16/spatz/spatz_task/depthwise_conv_fp16_spatz_task.c",
+                     "depthwise_conv/fp16/spatz/include",
                      "DEPTHWISE_CONV_FP16_SPATZ_TASK", "depthwise_conv_fp16_task",
                      "MAPS_HAS_DEPTHWISE_CONV_SPATZ_TASK"});
   if (needsSigmoid)
     tasks.push_back({GeneratedOpKind::Sigmoid, "sigmoid_fp16_spatz_task",
-                     "sigmoid/spatz_task/sigmoid_fp16_spatz_task.c", "sigmoid/include",
+                     "sigmoid/fp16/spatz/spatz_task/sigmoid_fp16_spatz_task.c", "sigmoid/fp16/spatz/include",
                      "SIGMOID_FP16_SPATZ_TASK", "sigmoid_fp16_task",
                      "MAPS_HAS_SIGMOID_SPATZ_TASK"});
   if (needsRelu)
