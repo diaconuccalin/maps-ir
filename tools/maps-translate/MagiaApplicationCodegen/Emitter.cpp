@@ -367,7 +367,12 @@ static void emitRecvDesc(const MagiaApplicationDescription &application,
 // receives tile them exactly, each on its own FIFO sub-ring, get a shared
 // payload ring that mirrors the slice's planned storage.  The receiver's FIFO
 // layout and every sender's payload mode are emitted from this one decision.
-static constexpr unsigned kRuntimeMaxSliceAliases = 8;
+//
+// The runtime registers each gathered slice in its slice alias table, indexed
+// by (slice id, token slot), and traps outside the default MAPS_ALIAS_MAX_SLICES
+// and MAPS_ALIAS_MAX_SLOTS of maps_utils.h; generated tiles assert these.
+static constexpr unsigned kRuntimeAliasMaxSlices = 64;
+static constexpr unsigned kRuntimeAliasMaxSlots = 4;
 
 static bool isSliceInplaceEligible(const MagiaApplicationDescription &application,
                                    const GeneratedTilePlan &plan,
@@ -396,16 +401,6 @@ static bool isSliceInplaceEligible(const MagiaApplicationDescription &applicatio
   return true;
 }
 
-static bool recvOwnsSubring(const MagiaApplicationDescription &application,
-                            const GeneratedTilePlan &plan, unsigned position) {
-  unsigned producer = application.recvs[plan.recvIndices[position]].producerIdx;
-  for (unsigned i = 0; i < plan.recvIndices.size(); ++i)
-    if (i != position &&
-        application.recvs[plan.recvIndices[i]].producerIdx == producer)
-      return false;
-  return true;
-}
-
 static bool isRecvInplaceEligible(const MagiaApplicationDescription &application,
                                   const GeneratedTilePlan &plan,
                                   unsigned position) {
@@ -431,8 +426,7 @@ static bool isRecvInplaceEligible(const MagiaApplicationDescription &application
         application.subslices[application.recvs[plan.recvIndices[i]].dstSubsliceIndex]
                 .sliceIndex == dst.sliceIndex)
       return false;
-  return recvOwnsSubring(application, plan, position) &&
-         isSliceInplaceEligible(application, plan, dst.sliceIndex);
+  return isSliceInplaceEligible(application, plan, dst.sliceIndex);
 }
 
 static bool isSliceGatherEligible(const MagiaApplicationDescription &application,
@@ -440,6 +434,8 @@ static bool isSliceGatherEligible(const MagiaApplicationDescription &application
                                   unsigned sliceIndex) {
   const GeneratedSlice &slice = application.slices[sliceIndex];
   if (slice.globalKind == GeneratedGlobalKind::Initializer || slice.shape.empty() ||
+      slice.sliceId >= kRuntimeAliasMaxSlices ||
+      application.numTokenSlots > kRuntimeAliasMaxSlots ||
       !isSliceInplaceEligible(application, plan, sliceIndex))
     return false;
 
@@ -449,9 +445,7 @@ static bool isSliceGatherEligible(const MagiaApplicationDescription &application
         application.subslices[application.recvs[plan.recvIndices[i]].dstSubsliceIndex];
     if (dst.sliceIndex != sliceIndex)
       continue;
-    if (dst.shape.size() != slice.shape.size() || dst.elemBytes != slice.elemBytes ||
-        application.recvs[plan.recvIndices[i]].producerIdx >= plan.recvIndices.size() ||
-        !recvOwnsSubring(application, plan, i))
+    if (dst.shape.size() != slice.shape.size() || dst.elemBytes != slice.elemBytes)
       return false;
     for (unsigned d = 0; d < dst.shape.size(); ++d)
       if (dst.stridesBytes[d] != slice.stridesBytes[d] ||
@@ -475,22 +469,15 @@ static bool isSliceGatherEligible(const MagiaApplicationDescription &application
   return covered != 0 && covered == product(slice.shape);
 }
 
-struct GatheredFifoLayout {
-  // Per destination-local producer: the 1-based shared ring it gathers into,
-  // or 0 when its payloads stay in its own slots.
-  SmallVector<unsigned> payloadRings;
-  // Bytes per slot of each shared ring (the gathered slice's slot size).
+static void planGatheredFifoLayout(const MagiaApplicationDescription &application,
+                                   GeneratedTilePlan &plan) {
+  SmallVector<unsigned> payloadRings(plan.recvIndices.size(), 0);
   SmallVector<uint64_t> ringBytes;
-};
-
-static GatheredFifoLayout
-getGatheredFifoLayout(const MagiaApplicationDescription &application,
-                      const GeneratedTilePlan &plan) {
-  GatheredFifoLayout layout;
-  layout.payloadRings.assign(plan.recvIndices.size(), 0);
-  for (unsigned i = 0; i < plan.recvIndices.size() &&
-                       layout.ringBytes.size() < kRuntimeMaxSliceAliases;
-       ++i) {
+  for (unsigned i = 0; i < plan.recvIndices.size(); ++i) {
+    // TransferCollector gives each receive its own sub-ring, numbered by its
+    // position on the destination tile.
+    assert(application.recvs[plan.recvIndices[i]].producerIdx == i &&
+           "receive producer index is not its position on the tile");
     unsigned sliceIndex =
         application.subslices[application.recvs[plan.recvIndices[i]].dstSubsliceIndex]
             .sliceIndex;
@@ -502,14 +489,24 @@ getGatheredFifoLayout(const MagiaApplicationDescription &application,
     if (!first || isRecvInplaceEligible(application, plan, i) ||
         !isSliceGatherEligible(application, plan, sliceIndex))
       continue;
-    layout.ringBytes.push_back(application.slices[sliceIndex].slotBytes);
+    ringBytes.push_back(application.slices[sliceIndex].slotBytes);
     for (unsigned j = i; j < plan.recvIndices.size(); ++j) {
       const GeneratedRecv &recv = application.recvs[plan.recvIndices[j]];
       if (application.subslices[recv.dstSubsliceIndex].sliceIndex == sliceIndex)
-        layout.payloadRings[recv.producerIdx] = layout.ringBytes.size();
+        payloadRings[j] = ringBytes.size();
     }
   }
-  return layout;
+  if (ringBytes.empty())
+    return;
+  plan.fifoPayloadRings = std::move(payloadRings);
+  plan.fifoSharedRingBytes = std::move(ringBytes);
+}
+
+void planGatheredFifoLayouts(MagiaApplicationDescription &application) {
+  if (application.target != "magia-v3")
+    return;
+  for (auto &[hartid, plan] : application.tilePlans)
+    planGatheredFifoLayout(application, plan);
 }
 
 static bool isGatheredSend(const MagiaApplicationDescription &application,
@@ -517,9 +514,9 @@ static bool isGatheredSend(const MagiaApplicationDescription &application,
   auto it = application.tilePlans.find(send.dstHartid);
   if (it == application.tilePlans.end())
     llvm_unreachable("send targets a tile without a plan");
-  GatheredFifoLayout layout = getGatheredFifoLayout(application, it->second);
-  return send.producerIdx < layout.payloadRings.size() &&
-         layout.payloadRings[send.producerIdx] != 0;
+  const GeneratedTilePlan &plan = it->second;
+  return !plan.fifoPayloadRings.empty() &&
+         plan.fifoPayloadRings[send.producerIdx] != 0;
 }
 
 static void emitSendDesc(const MagiaApplicationDescription &application,
@@ -550,9 +547,13 @@ static void emitSendDesc(const MagiaApplicationDescription &application,
   os << ",\n";
   os << "    .producer_idx = " << send.producerIdx << ",\n";
   if (application.target == "magia-v3") {
+    // Builds with MAPS_FIFO_INPLACE_RECV=0 ignore the shared payload rings.
     bool gathered = isGatheredSend(application, send);
     os << "    .dst_payload_mode = "
-       << (gathered ? "FIFO_PAYLOAD_SHARED" : "FIFO_PAYLOAD_INLINE") << ",\n";
+       << (gathered ? "MAPS_FIFO_INPLACE_RECV ? FIFO_PAYLOAD_SHARED : "
+                      "FIFO_PAYLOAD_INLINE"
+                    : "FIFO_PAYLOAD_INLINE")
+       << ",\n";
     os << "    .dst_offset_bytes = "
        << (gathered ? computeOffsetBytes(dst.offset, dst.stridesBytes) : 0)
        << "u,\n";
@@ -620,30 +621,45 @@ static uint64_t getSubsliceL1Offset(const MagiaApplicationDescription &applicati
 static uint64_t getFifoSlotDataSize(const MagiaApplicationDescription &application,
                                     unsigned recvIndex);
 
-// Bytes the magia-v3 FIFO takes on this tile: the plain variable layout, or,
-// when the tile gathers slices in place, the shared layout the runtime builds
-// (members keep metadata-only slots, plus the payload map and shared rings).
-static void emitFifoLayoutBytes(const MagiaApplicationDescription &application,
-                                const GeneratedTilePlan &plan,
-                                llvm::raw_ostream &os) {
-  GatheredFifoLayout layout = getGatheredFifoLayout(application, plan);
+// Bytes of the magia-v3 variable FIFO layout or, with `shared`, of the shared
+// layout the runtime builds when the tile gathers slices in place (members keep
+// metadata-only slots, plus the payload map and shared rings).
+static void emitFifoVariantBytes(const MagiaApplicationDescription &application,
+                                 const GeneratedTilePlan &plan, bool shared,
+                                 llvm::raw_ostream &os) {
   unsigned numProducers = plan.recvIndices.size();
   os << "FIFO_HEADER_SIZE + " << numProducers
      << "u * FIFO_RING_STATE_SIZE + " << numProducers + 1
      << "u * FIFO_SLOT_OFFSET_SIZE";
   for (unsigned i = 0; i < numProducers; ++i) {
-    uint64_t dataBytes =
-        !layout.ringBytes.empty() && layout.payloadRings[i] != 0
-            ? 0
-            : getFifoSlotDataSize(application, plan.recvIndices[i]);
+    uint64_t dataBytes = shared && plan.fifoPayloadRings[i] != 0
+                             ? 0
+                             : getFifoSlotDataSize(application, plan.recvIndices[i]);
     os << " + MAPS_NUM_TOKEN_SLOTS * (FIFO_SLOT_META_SIZE + ((" << dataBytes
        << "u + 3u) & ~3u))";
   }
-  if (layout.ringBytes.empty())
+  if (!shared)
     return;
   os << " + " << numProducers << "u * FIFO_PAYLOAD_RING_SIZE";
-  for (uint64_t bytes : layout.ringBytes)
+  for (uint64_t bytes : plan.fifoSharedRingBytes)
     os << " + MAPS_NUM_TOKEN_SLOTS * ((" << bytes << "u + 3u) & ~3u)";
+}
+
+// Bytes the magia-v3 FIFO takes on this tile.  Builds with
+// MAPS_FIFO_INPLACE_RECV=0 ignore the shared payload rings and build the
+// variable layout instead.
+static void emitFifoLayoutBytes(const MagiaApplicationDescription &application,
+                                const GeneratedTilePlan &plan,
+                                llvm::raw_ostream &os) {
+  if (plan.fifoSharedRingBytes.empty()) {
+    emitFifoVariantBytes(application, plan, /*shared=*/false, os);
+    return;
+  }
+  os << "(MAPS_FIFO_INPLACE_RECV ? (";
+  emitFifoVariantBytes(application, plan, /*shared=*/true, os);
+  os << ") : (";
+  emitFifoVariantBytes(application, plan, /*shared=*/false, os);
+  os << "))";
 }
 
 static void emitL1DataBaseOffset(const MagiaApplicationDescription &application,
@@ -865,39 +881,36 @@ static void emitFifoSlotDataSizes(const MagiaApplicationDescription &application
   }
   os << "};\n\n";
 
-  GatheredFifoLayout layout = getGatheredFifoLayout(application, plan);
-  if (layout.ringBytes.empty())
+  if (plan.fifoSharedRingBytes.empty())
     return;
   os << "static const uint32_t maps_application_tile_" << plan.hartid
      << "_fifo_payload_rings[] = {";
-  for (unsigned i = 0; i < layout.payloadRings.size(); ++i)
-    os << (i != 0 ? ", " : "") << layout.payloadRings[i] << "u";
+  for (unsigned i = 0; i < plan.fifoPayloadRings.size(); ++i)
+    os << (i != 0 ? ", " : "") << plan.fifoPayloadRings[i] << "u";
   os << "};\n\n";
   os << "static const uint32_t maps_application_tile_" << plan.hartid
      << "_fifo_shared_ring_bytes[] = {";
-  for (unsigned i = 0; i < layout.ringBytes.size(); ++i)
-    os << (i != 0 ? ", " : "") << layout.ringBytes[i] << "u";
+  for (unsigned i = 0; i < plan.fifoSharedRingBytes.size(); ++i)
+    os << (i != 0 ? ", " : "") << plan.fifoSharedRingBytes[i] << "u";
   os << "};\n\n";
 
-  // The shared layout (gathering members keep metadata-only slots) must fit
-  // in the FIFO region reserved for the plain layout.
-  unsigned numProducers = plan.recvIndices.size();
-  os << "_Static_assert(FIFO_HEADER_SIZE + " << numProducers
-     << "u * FIFO_RING_STATE_SIZE + " << numProducers + 1
-     << "u * FIFO_SLOT_OFFSET_SIZE";
-  for (unsigned i = 0; i < numProducers; ++i) {
-    uint64_t dataBytes = layout.payloadRings[i] != 0
-                             ? 0
-                             : getFifoSlotDataSize(application, plan.recvIndices[i]);
-    os << " + MAPS_APPLICATION_NUM_TOKEN_SLOTS * (FIFO_SLOT_META_SIZE + (("
-       << dataBytes << "u + 3u) & ~3u))";
-  }
-  os << " + " << numProducers << "u * FIFO_PAYLOAD_RING_SIZE";
-  for (uint64_t bytes : layout.ringBytes)
-    os << " + MAPS_APPLICATION_NUM_TOKEN_SLOTS * ((" << bytes << "u + 3u) & ~3u)";
-  os << " <= ";
-  emitL1DataBaseOffset(application, plan.hartid, os);
-  os << ", \"shared FIFO payload rings exceed the reserved FIFO region\");\n\n";
+  // Gathered slices must fit the runtime's slice alias table.
+  unsigned maxSliceId = 0;
+  for (unsigned i = 0; i < plan.recvIndices.size(); ++i)
+    if (plan.fifoPayloadRings[i] != 0)
+      maxSliceId = std::max(
+          maxSliceId,
+          application.slices[application.subslices
+                                 [application.recvs[plan.recvIndices[i]]
+                                      .dstSubsliceIndex]
+                                     .sliceIndex]
+              .sliceId);
+  os << "#if MAPS_FIFO_INPLACE_RECV\n";
+  os << "_Static_assert(" << maxSliceId
+     << "u < MAPS_ALIAS_MAX_SLICES && MAPS_APPLICATION_NUM_TOKEN_SLOTS <= "
+        "MAPS_ALIAS_MAX_SLOTS, \"gathered slices exceed the slice alias "
+        "table\");\n";
+  os << "#endif\n\n";
 }
 
 static void emitPlanArrayInitializer(StringRef fieldName, StringRef arraySuffix,
@@ -1166,11 +1179,11 @@ static void emitApplicationTilePlanConstructor(
   if (application.target == "magia-v3" && !plan.recvIndices.empty()) {
     os << "    .slot_data_sizes = maps_application_tile_" << plan.hartid
        << "_fifo_slot_data_sizes,\n";
-    GatheredFifoLayout layout = getGatheredFifoLayout(application, plan);
-    if (!layout.ringBytes.empty()) {
+    if (!plan.fifoSharedRingBytes.empty()) {
       os << "    .payload_rings = maps_application_tile_" << plan.hartid
          << "_fifo_payload_rings,\n";
-      os << "    .num_shared_rings = " << layout.ringBytes.size() << "u,\n";
+      os << "    .num_shared_rings = " << plan.fifoSharedRingBytes.size()
+         << "u,\n";
       os << "    .shared_ring_bytes = maps_application_tile_" << plan.hartid
          << "_fifo_shared_ring_bytes,\n";
     }
